@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { useAlert } from '../context/AlertContext';
 import { AlertStatus } from '../types';
 
@@ -26,13 +26,27 @@ export const AlertHistoryScreen: React.FC = () => {
     }
   };
 
+  const handleClearAlerts = () => {
+    Alert.alert(
+      'Clear History',
+      'Are you sure you want to clear all alerts?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Confirm', style: 'destructive', onPress: clearAlerts }
+      ]
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.headerRow}>
           <Text style={styles.title}>Alert History</Text>
           {alerts.length > 0 && clearAlerts && (
-            <TouchableOpacity onPress={clearAlerts} style={styles.clearButton}>
+            <TouchableOpacity 
+              onPress={handleClearAlerts} 
+              style={styles.clearButton}
+            >
               <Text style={styles.clearButtonText}>Clear</Text>
             </TouchableOpacity>
           )}
