@@ -6,14 +6,6 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types';
 
-let useAlert: any = null;
-try {
-  const module = require('../context/AlertContext');
-  if (module && module.useAlert) {
-    useAlert = module.useAlert;
-  }
-} catch(e) {}
-
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'DeadManCheckIn'>;
 
 export const DeadManCheckInScreen: React.FC = () => {
@@ -21,14 +13,6 @@ export const DeadManCheckInScreen: React.FC = () => {
   const { safeWindow, markCheckInSafe, markMissedCheckIn, getCheckInRemainingSeconds } = useSafeWindow();
   
   const [timeLeft, setTimeLeft] = useState(getCheckInRemainingSeconds());
-
-  let hasAlertContext = false;
-  try {
-    if (useAlert) {
-      useAlert(); // test if provider is there
-      hasAlertContext = true;
-    }
-  } catch (e) {}
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -56,7 +40,7 @@ export const DeadManCheckInScreen: React.FC = () => {
 
   const handleSimulateMissed = () => {
     markMissedCheckIn();
-    Alert.alert('Missed check-in detected', 'Silent SOS protocol initiated.');
+    Alert.alert('Missed check-in detected', 'Silent SOS integration pending until AlertContext is merged.');
   };
 
   return (
@@ -93,11 +77,7 @@ export const DeadManCheckInScreen: React.FC = () => {
         ) : safeWindow.status === 'MISSED_CHECKIN' ? (
           <View style={[styles.card, styles.errorCard]}>
             <Text style={styles.errorTitle}>Missed check-in detected</Text>
-            {hasAlertContext ? (
-              <Text style={styles.errorText}>Silent SOS alert has been created.</Text>
-            ) : (
-              <Text style={styles.errorText}>SOS integration pending until Person A’s AlertContext is merged.</Text>
-            )}
+            <Text style={styles.errorText}>Silent SOS integration pending until Person A’s AlertContext is merged.</Text>
           </View>
         ) : null}
 

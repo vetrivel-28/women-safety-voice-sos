@@ -3,27 +3,11 @@ import { View, Text, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
 import { useSafeWindow } from '../context/SafeWindowContext';
 import { PrimaryButton } from '../components/PrimaryButton';
 
-let useAlert: any = null;
-try {
-  const module = require('../context/AlertContext');
-  if (module && module.useAlert) {
-    useAlert = module.useAlert;
-  }
-} catch(e) {}
-
 export const SafeWindowScreen: React.FC = () => {
   const { safeWindow, startSafeWindow, endSafeWindow, getRemainingSeconds, getCheckInRemainingSeconds } = useSafeWindow();
   
   const [timeLeft, setTimeLeft] = useState(getRemainingSeconds());
   const [checkInTimeLeft, setCheckInTimeLeft] = useState(getCheckInRemainingSeconds());
-
-  let hasAlertContext = false;
-  try {
-    if (useAlert) {
-      useAlert(); // just checking if it works
-      hasAlertContext = true;
-    }
-  } catch (e) {}
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -106,11 +90,7 @@ export const SafeWindowScreen: React.FC = () => {
           <View style={styles.activeSection}>
             <View style={styles.errorCard}>
               <Text style={styles.errorTitle}>Missed check-in detected.</Text>
-              {hasAlertContext ? (
-                <Text style={styles.errorText}>Silent SOS alert has been created.</Text>
-              ) : (
-                <Text style={styles.errorText}>SOS integration pending until AlertContext is merged.</Text>
-              )}
+              <Text style={styles.errorText}>Silent SOS integration pending until Person A’s AlertContext is merged.</Text>
             </View>
             <PrimaryButton title="End Safe Window" variant="normal" onPress={endSafeWindow} />
           </View>
