@@ -1,30 +1,30 @@
 import React from 'react';
-import { TouchableOpacity, Text, StyleSheet, ViewStyle, TextStyle } from 'react-native';
-
-type Variant = 'emergency' | 'dark' | 'safe' | 'normal';
+import { Text, TouchableOpacity, StyleSheet } from 'react-native';
 
 interface PrimaryButtonProps {
   title: string;
   onPress: () => void;
-  variant?: Variant;
-  style?: ViewStyle;
+  variant?: 'emergency' | 'dark' | 'safe' | 'warning' | 'normal';
+  disabled?: boolean;
 }
 
 export const PrimaryButton: React.FC<PrimaryButtonProps> = ({ 
   title, 
   onPress, 
-  variant = 'normal',
-  style 
+  variant = 'normal', 
+  disabled = false 
 }) => {
   return (
     <TouchableOpacity 
-      style={[styles.button, styles[variant], style]} 
+      style={[
+        styles.button, 
+        styles[variant],
+        disabled && styles.disabled
+      ]} 
       onPress={onPress}
-      activeOpacity={0.8}
+      disabled={disabled}
     >
-      <Text style={[styles.text, variant === 'normal' ? styles.textNormal : styles.textLight]}>
-        {title}
-      </Text>
+      <Text style={styles.buttonText}>{title}</Text>
     </TouchableOpacity>
   );
 };
@@ -48,17 +48,18 @@ const styles = StyleSheet.create({
   safe: {
     backgroundColor: '#16A34A',
   },
+  warning: {
+    backgroundColor: '#F59E0B',
+  },
   normal: {
-    backgroundColor: '#E5E7EB',
+    backgroundColor: '#374151',
   },
-  text: {
-    fontSize: 16,
+  disabled: {
+    opacity: 0.5,
+  },
+  buttonText: {
+    fontSize: 18,
     fontWeight: 'bold',
-  },
-  textLight: {
     color: '#FFFFFF',
-  },
-  textNormal: {
-    color: '#111827',
   },
 });

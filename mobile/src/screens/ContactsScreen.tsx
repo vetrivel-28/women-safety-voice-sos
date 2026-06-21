@@ -3,55 +3,62 @@ import { View, Text, StyleSheet, SafeAreaView, TextInput, TouchableOpacity, Scro
 import { useContacts } from '../context/ContactsContext';
 
 export const ContactsScreen: React.FC = () => {
-  const { contacts, addContact, deleteContact } = useContacts();
+  const { getTopFiveContacts, addContact, deleteContact } = useContacts();
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [relationship, setRelationship] = useState('');
   const [priorityStr, setPriorityStr] = useState('');
 
+  const topFive = getTopFiveContacts();
+
   const handleAddContact = () => {
     if (!name.trim()) {
-      Alert.alert('Validation Error', 'Name is required');
+      Alert.alert('Validation Error', 'Name is required.');
       return;
     }
     if (!phone.trim()) {
-      Alert.alert('Validation Error', 'Phone number is required');
+      Alert.alert('Validation Error', 'Phone number is required.');
       return;
     }
 
-    let priority = parseInt(priorityStr.trim(), 10);
-    if (isNaN(priority)) {
-      // Auto-assign next priority based on existing max
-      const maxPriority = contacts.length > 0 ? Math.max(...contacts.map(c => c.priority)) : 0;
-      priority = maxPriority + 1;
+    let priority: number | undefined;
+    if (priorityStr.trim() !== '') {
+      priority = parseInt(priorityStr.trim(), 10);
+      if (isNaN(priority)) {
+        Alert.alert('Validation Error', 'Priority must be a number if provided.');
+        return;
+      }
     }
 
     addContact({
       name: name.trim(),
       phone: phone.trim(),
       relationship: relationship.trim() || 'Friend',
-      priority,
+      priority: priority as number, // Context handles undefined/NaN by auto-assigning
     });
 
-    // Reset form
     setName('');
     setPhone('');
     setRelationship('');
     setPriorityStr('');
   };
 
-  const sortedContacts = [...contacts].sort((a, b) => a.priority - b.priority).slice(0, 5);
+  const handleClearForm = () => {
+    setName('');
+    setPhone('');
+    setRelationship('');
+    setPriorityStr('');
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.container}>
           <Text style={styles.title}>Emergency Contacts</Text>
+          <Text style={styles.subtitle}>Add trusted people who should receive alerts.</Text>
 
           <View style={styles.formCard}>
-            <Text style={styles.sectionTitle}>Add New Contact</Text>
-            
             <TextInput
               style={styles.input}
               placeholder="Name *"
@@ -67,30 +74,35 @@ export const ContactsScreen: React.FC = () => {
             />
             <TextInput
               style={styles.input}
-              placeholder="Relationship (e.g. Sister)"
+              placeholder="Relationship"
               value={relationship}
               onChangeText={setRelationship}
             />
             <TextInput
               style={styles.input}
-              placeholder="Priority (Optional number)"
+              placeholder="Priority"
               keyboardType="numeric"
               value={priorityStr}
               onChangeText={setPriorityStr}
             />
 
-            <TouchableOpacity style={styles.addButton} onPress={handleAddContact}>
-              <Text style={styles.addButtonText}>Add Contact</Text>
-            </TouchableOpacity>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity style={styles.addButton} onPress={handleAddContact}>
+                <Text style={styles.addButtonText}>Add Contact</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.clearButton} onPress={handleClearForm}>
+                <Text style={styles.clearButtonText}>Clear form</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           <View style={styles.listSection}>
             <Text style={styles.sectionTitle}>Top 5 Emergency Contacts</Text>
             
-            {sortedContacts.length === 0 ? (
-              <Text style={styles.emptyText}>No contacts added yet.</Text>
+            {topFive.length === 0 ? (
+              <Text style={styles.emptyText}>No emergency contacts added yet.</Text>
             ) : (
-              sortedContacts.map(contact => (
+              topFive.map(contact => (
                 <View key={contact.id} style={styles.contactCard}>
                   <View style={styles.contactHeader}>
                     <View style={styles.nameRow}>
@@ -123,7 +135,8 @@ export const ContactsScreen: React.FC = () => {
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#FFF7F7' },
   container: { flexGrow: 1, padding: 24 },
-  title: { fontSize: 28, fontWeight: 'bold', color: '#111827', marginBottom: 24 },
+  title: { fontSize: 28, fontWeight: 'bold', color: '#111827', marginBottom: 4 },
+  subtitle: { fontSize: 16, color: '#6B7280', marginBottom: 24 },
   sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#111827', marginBottom: 16 },
   formCard: {
     backgroundColor: '#FFFFFF',
@@ -141,13 +154,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     backgroundColor: '#F9FAFB'
   },
+  buttonRow: { flexDirection: 'row', gap: 12 },
   addButton: {
+    flex: 2,
     backgroundColor: '#111827',
     padding: 14,
     borderRadius: 8,
     alignItems: 'center'
   },
   addButtonText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 16 },
+  clearButton: {
+    flex: 1,
+    backgroundColor: '#E5E7EB',
+    padding: 14,
+    borderRadius: 8,
+    alignItems: 'center'
+  },
+  clearButtonText: { color: '#374151', fontWeight: 'bold', fontSize: 16 },
   listSection: { marginTop: 8 },
   emptyText: { color: '#6B7280', fontStyle: 'italic', marginTop: 8 },
   contactCard: {

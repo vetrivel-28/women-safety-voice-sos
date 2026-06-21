@@ -29,4 +29,20 @@ export interface EmergencyContact {
   phone: string;
   relationship: string;
   priority: number;
+  createdAt: string;
+}
+
+export type SafeWindowStatus = 'INACTIVE' | 'ACTIVE' | 'COMPLETED' | 'MISSED_CHECKIN';
+
+export type SafeWindowDuration = 15 | 30 | 60 | 0.5;
+
+export interface SafeWindowState {
+  status: SafeWindowStatus;
+  durationMinutes: SafeWindowDuration | null;
+  startedAt: string | null;
+  endsAt: string | null;
+  checkInDueAt: string | null;
+  lastCheckInAt: string | null;
+  demoMode: boolean;
+  missedCheckInAt?: string | null;
 }

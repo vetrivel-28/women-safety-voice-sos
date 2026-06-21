@@ -8,39 +8,45 @@ export const SettingsScreen: React.FC = () => {
         <Text style={styles.title}>Settings</Text>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Demo PINs</Text>
+          <Text style={styles.sectionTitle}>1. Demo PINs</Text>
           <View style={styles.card}>
             <Text style={styles.listItem}>• Real Cancel PIN: <Text style={styles.bold}>1234</Text></Text>
             <Text style={styles.listItem}>• Duress PIN: <Text style={styles.bold}>4321</Text></Text>
+            <Text style={styles.note}>Note: These are demo values for V1 testing.</Text>
           </View>
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Privacy Note</Text>
+          <Text style={styles.sectionTitle}>2. Privacy Note</Text>
           <View style={styles.card}>
-            <Text style={styles.text}>SafeHer V1 does not use always-on microphone or camera.</Text>
-            <Text style={[styles.text, { marginTop: 8 }]}>Voice, camera, and AI features are not included in V1.</Text>
+            <Text style={styles.listItem}>• SafeHer V1 does not use always-on microphone.</Text>
+            <Text style={styles.listItem}>• SafeHer V1 does not use camera or evidence capture.</Text>
+            <Text style={styles.listItem}>• Safe Window and Check-in work while the app is open in Expo Go.</Text>
           </View>
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Current App Mode</Text>
+          <Text style={styles.sectionTitle}>3. Current V1 Features</Text>
           <View style={styles.card}>
+            <Text style={styles.listItem}>✓ Home Safety Dashboard</Text>
             <Text style={styles.listItem}>✓ Manual SOS</Text>
             <Text style={styles.listItem}>✓ Silent SOS</Text>
-            <Text style={styles.listItem}>✓ Real/Duress PIN</Text>
-            <Text style={styles.listItem}>✓ Local contacts</Text>
-            <Text style={styles.listItem}>✓ Local alert history</Text>
+            <Text style={styles.listItem}>✓ Emergency Contacts</Text>
+            <Text style={styles.listItem}>✓ Safe Window timer</Text>
+            <Text style={styles.listItem}>✓ Dead Man Check-in</Text>
+            <Text style={styles.listItem}>✓ Local alert history, if available</Text>
             <Text style={styles.listItem}>✓ Expo Go testing mode</Text>
           </View>
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Coming Next</Text>
+          <Text style={styles.sectionTitle}>4. Coming Next</Text>
           <View style={styles.card}>
             <Text style={styles.listItemMuted}>• Location sharing</Text>
-            <Text style={styles.listItemMuted}>• Safe Window timer</Text>
-            <Text style={styles.listItemMuted}>• Dead Man Check-in</Text>
+            <Text style={styles.listItemMuted}>• Google Maps link</Text>
+            <Text style={styles.listItemMuted}>• Backend integration</Text>
+            <Text style={styles.listItemMuted}>• Guardian dashboard</Text>
+            <Text style={styles.listItemMuted}>• SMS/email notification service</Text>
           </View>
         </View>
 
@@ -61,8 +67,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 1
   },
-  text: { fontSize: 14, color: '#4B5563', lineHeight: 20 },
   listItem: { fontSize: 15, color: '#111827', marginBottom: 8 },
   listItemMuted: { fontSize: 15, color: '#6B7280', marginBottom: 8 },
-  bold: { fontWeight: 'bold' }
+  bold: { fontWeight: 'bold' },
+  note: { fontSize: 14, color: '#6B7280', fontStyle: 'italic', marginTop: 8 }
 });
