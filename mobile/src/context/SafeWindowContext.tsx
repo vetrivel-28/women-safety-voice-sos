@@ -1,24 +1,5 @@
-import React, { createContext, useState, useContext, useEffect, useRef } from 'react';
+import React, { createContext, useState, useContext, useEffect } from 'react';
 import { SafeWindowState, SafeWindowDuration } from '../types';
-
-let AlertContextRef: any = null;
-try {
-  const module = require('./AlertContext');
-  if (module && module.AlertContext) { // Need to export AlertContext if not already exported... Wait, I didn't export AlertContext.
-    // If I didn't export AlertContext, I can't use useContext. 
-    // Wait, in my AlertContext.tsx I did: `const AlertContext = createContext(...)` and it's not exported.
-    // So I can't use useContext(AlertContext).
-    // I HAVE to use `useAlert()`.
-  }
-} catch(e) {}
-
-let useAlertHook: any = null;
-try {
-  const module = require('./AlertContext');
-  if (module && module.useAlert) {
-    useAlertHook = module.useAlert;
-  }
-} catch(e) {}
 
 interface SafeWindowContextType {
   safeWindow: SafeWindowState;
@@ -45,17 +26,6 @@ const initialState: SafeWindowState = {
 
 export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [safeWindow, setSafeWindow] = useState<SafeWindowState>(initialState);
-  const alertedMissedRef = useRef(false);
-
-  let alertCtx: any = null;
-  try {
-    if (useAlertHook) {
-      alertCtx = useAlertHook();
-    }
-  } catch (e) {
-    // Threw error because provider is missing
-    alertCtx = null;
-  }
 
   const startSafeWindow = (durationMinutes: SafeWindowDuration) => {
     const now = new Date();
@@ -66,8 +36,6 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     // checkInDueAt: demo mode 15 seconds, normal mode 5 minutes
     const checkInDueMs = demoMode ? 15 * 1000 : 5 * 60 * 1000;
     const checkInDueAt = new Date(now.getTime() + checkInDueMs);
-
-    alertedMissedRef.current = false; // reset ref
 
     setSafeWindow({
       status: 'ACTIVE',
@@ -85,7 +53,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setSafeWindow(prev => ({
       ...prev,
       status: 'COMPLETED',
-      endsAt: prev.endsAt || new Date().toISOString(),
+      // Keep startedAt and endsAt for display if useful
     }));
   };
 
@@ -107,6 +75,9 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const markMissedCheckIn = () => {
     setSafeWindow(prev => {
       if (prev.status === 'MISSED_CHECKIN') return prev;
+      
+      // TODO: After Person A’s AlertContext is merged, create Silent SOS alert here.
+      
       return {
         ...prev,
         status: 'MISSED_CHECKIN',
@@ -115,16 +86,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     });
   };
 
-  const triggerSilentSOS = () => {
-    if (!alertCtx) return;
-    if (alertedMissedRef.current) return;
-    
-    alertedMissedRef.current = true;
-    if (alertCtx.createAlert) {
-      alertCtx.createAlert('SILENT_SOS', 'ACTIVE', 'Silent SOS triggered by missed check-in', 'NONE');
-    }
-  };
-
+  // Auto-detect missed check-in and window expiry
   useEffect(() => {
     let interval: NodeJS.Timeout;
     
@@ -132,15 +94,12 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       interval = setInterval(() => {
         const now = new Date().getTime();
         
-        // Check if window ended
-        if (safeWindow.endsAt && now >= new Date(safeWindow.endsAt).getTime()) {
-          endSafeWindow();
-          return;
-        }
-
         // Check if check-in missed
         if (safeWindow.checkInDueAt && now >= new Date(safeWindow.checkInDueAt).getTime()) {
           markMissedCheckIn();
+        } else if (safeWindow.endsAt && now >= new Date(safeWindow.endsAt).getTime()) {
+          // Check if window ended
+          endSafeWindow();
         }
       }, 1000);
     }
@@ -149,14 +108,6 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       if (interval) clearInterval(interval);
     };
   }, [safeWindow.status, safeWindow.endsAt, safeWindow.checkInDueAt]);
-
-  // Separate effect to trigger SOS so we don't put it directly in the setInterval,
-  // making it cleaner and easier to guarantee it only fires once.
-  useEffect(() => {
-    if (safeWindow.status === 'MISSED_CHECKIN' && !alertedMissedRef.current) {
-      triggerSilentSOS();
-    }
-  }, [safeWindow.status, alertCtx]);
 
   const getRemainingSeconds = () => {
     if (safeWindow.status === 'INACTIVE' || safeWindow.status === 'COMPLETED' || safeWindow.status === 'MISSED_CHECKIN') return 0;

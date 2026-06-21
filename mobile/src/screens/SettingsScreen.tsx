@@ -29,12 +29,11 @@ export const SettingsScreen: React.FC = () => {
           <Text style={styles.sectionTitle}>3. Current V1 Features</Text>
           <View style={styles.card}>
             <Text style={styles.listItem}>✓ Home Safety Dashboard</Text>
-            <Text style={styles.listItem}>✓ Manual SOS</Text>
-            <Text style={styles.listItem}>✓ Silent SOS</Text>
             <Text style={styles.listItem}>✓ Emergency Contacts</Text>
+            <Text style={styles.listItem}>✓ Settings</Text>
             <Text style={styles.listItem}>✓ Safe Window timer</Text>
-            <Text style={styles.listItem}>✓ Dead Man Check-in</Text>
-            <Text style={styles.listItem}>✓ Local alert history, if available</Text>
+            <Text style={styles.listItem}>✓ Dead Man Check-in timer</Text>
+            <Text style={styles.listItem}>✓ Missed check-in detection</Text>
             <Text style={styles.listItem}>✓ Expo Go testing mode</Text>
           </View>
         </View>
@@ -42,6 +41,7 @@ export const SettingsScreen: React.FC = () => {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>4. Coming Next</Text>
           <View style={styles.card}>
+            <Text style={styles.listItemMuted}>• Missed check-in → Silent SOS integration after AlertContext merge</Text>
             <Text style={styles.listItemMuted}>• Location sharing</Text>
             <Text style={styles.listItemMuted}>• Google Maps link</Text>
             <Text style={styles.listItemMuted}>• Backend integration</Text>
