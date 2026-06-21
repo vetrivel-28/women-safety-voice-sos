@@ -1,0 +1,140 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, SafeAreaView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
+import { useAlert } from '../context/AlertContext';
+
+export const SilentSOSScreen: React.FC = () => {
+  const { createAlert } = useAlert();
+  
+  const [countdown, setCountdown] = useState(5);
+  const [pin, setPin] = useState('');
+  const [status, setStatus] = useState<'COUNTING_DOWN' | 'ACTIVE' | 'CANCELLED'>('COUNTING_DOWN');
+  const [message, setMessage] = useState('Silent safety alert will activate in 5 seconds');
+  const [demoNote, setDemoNote] = useState('');
+  
+  const hasCreatedAlert = useRef(false);
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (status === 'COUNTING_DOWN' && countdown > 0) {
+      timer = setTimeout(() => {
+        setCountdown(prev => prev - 1);
+        setMessage(`Silent safety alert will activate in ${countdown - 1} seconds`);
+      }, 1000);
+    } else if (status === 'COUNTING_DOWN' && countdown === 0) {
+      if (!hasCreatedAlert.current) {
+        hasCreatedAlert.current = true;
+        createAlert('SILENT_SOS', 'ACTIVE', 'Silent safety alert active');
+        setStatus('ACTIVE');
+        setMessage('Silent safety alert active');
+      }
+    }
+    return () => clearTimeout(timer);
+  }, [countdown, status, createAlert]);
+
+  const handleCancel = () => {
+    if (hasCreatedAlert.current) return;
+
+    if (pin === '1234') {
+      hasCreatedAlert.current = true;
+      setStatus('CANCELLED');
+      setMessage('Silent SOS cancelled');
+      createAlert('SILENT_SOS', 'CANCELLED', 'Silent SOS cancelled', 'REAL_PIN');
+    } else if (pin === '4321') {
+      hasCreatedAlert.current = true;
+      setStatus('CANCELLED');
+      setMessage('Silent SOS cancelled');
+      setDemoNote('Demo note: duress alert saved silently in Alert History.');
+      createAlert('SILENT_SOS', 'SILENT_DURESS_ACTIVE', 'Silent SOS cancelled', 'DURESS_PIN');
+    } else {
+      Alert.alert('Invalid PIN', 'The PIN you entered is incorrect.');
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+        <ScrollView contentContainerStyle={styles.container}>
+          <Text style={styles.title}>Silent SOS</Text>
+          
+          <Text style={[styles.warningText, status === 'ACTIVE' && styles.activeText]}>
+            {message}
+          </Text>
+
+          {status === 'COUNTING_DOWN' && (
+            <Text style={styles.countdownNumber}>{countdown}</Text>
+          )}
+
+          {status === 'COUNTING_DOWN' && (
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.pinInput}
+                placeholder="Enter PIN"
+                keyboardType="numeric"
+                secureTextEntry
+                value={pin}
+                onChangeText={setPin}
+                maxLength={4}
+              />
+              <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {demoNote !== '' && (
+            <Text style={styles.demoNote}>{demoNote}</Text>
+          )}
+
+          <View style={styles.helperCard}>
+            <Text style={styles.helperText}>Real cancel PIN: 1234</Text>
+            <Text style={styles.helperText}>Duress PIN: 4321</Text>
+            <Text style={styles.helperTextMuted}>This is demo mode.</Text>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+};
+
+const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: '#FFF7F7' },
+  container: { flexGrow: 1, padding: 24, justifyContent: 'center', alignItems: 'center' },
+  title: { fontSize: 28, fontWeight: 'bold', color: '#111827', marginBottom: 16 },
+  warningText: { fontSize: 16, color: '#4B5563', textAlign: 'center', marginBottom: 24 },
+  activeText: { color: '#111827', fontSize: 20, fontWeight: 'bold' },
+  countdownNumber: { fontSize: 56, color: '#6B7280', marginBottom: 32 },
+  inputContainer: { width: '100%', alignItems: 'center', marginBottom: 32 },
+  pinInput: { 
+    width: '80%', 
+    height: 50, 
+    borderWidth: 1, 
+    borderColor: '#D1D5DB', 
+    borderRadius: 8, 
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    fontSize: 18,
+    textAlign: 'center',
+    marginBottom: 16,
+    letterSpacing: 8
+  },
+  cancelButton: {
+    backgroundColor: '#374151',
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 8,
+    width: '80%',
+    alignItems: 'center'
+  },
+  cancelButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
+  demoNote: { color: '#7F1D1D', fontStyle: 'italic', marginBottom: 24, textAlign: 'center' },
+  helperCard: {
+    marginTop: 'auto',
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    borderRadius: 8,
+    width: '100%',
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 1
+  },
+  helperText: { fontSize: 14, color: '#111827', marginBottom: 4 },
+  helperTextMuted: { fontSize: 12, color: '#6B7280', marginTop: 8, fontStyle: 'italic' },
+});
