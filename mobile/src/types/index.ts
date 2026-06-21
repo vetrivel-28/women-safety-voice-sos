@@ -21,6 +21,14 @@ export interface SOSAlert {
   cancelledAt?: string;
   cancelMethod?: 'REAL_PIN' | 'DURESS_PIN' | 'NONE';
   visibleMessage: string;
+  location?: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number | null;
+    mapLink: string;
+    capturedAt: string;
+    permissionDenied?: boolean;
+  };
 }
 
 export interface EmergencyContact {

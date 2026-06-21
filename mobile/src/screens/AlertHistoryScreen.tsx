@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert, Linking } from 'react-native';
 import { useAlert } from '../context/AlertContext';
 import { AlertStatus } from '../types';
 
@@ -76,6 +76,18 @@ export const AlertHistoryScreen: React.FC = () => {
                   Cancel Method: {alert.cancelMethod}
                 </Text>
               )}
+              {alert.location && !alert.location.permissionDenied ? (
+                <View style={styles.locationContainer}>
+                  <Text style={styles.locationText}>
+                    {alert.location.latitude.toFixed(4)}, {alert.location.longitude.toFixed(4)}
+                  </Text>
+                  <TouchableOpacity onPress={() => Linking.openURL(alert.location!.mapLink)}>
+                    <Text style={styles.mapLinkText}>View on Map</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : alert.status === 'ACTIVE' ? (
+                <Text style={styles.locationUnavailableText}>Location not available</Text>
+              ) : null}
             </View>
           ))
         )}
@@ -115,5 +127,9 @@ const styles = StyleSheet.create({
   badgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: 'bold' },
   messageText: { fontSize: 14, color: '#111827', marginBottom: 8 },
   dateText: { fontSize: 12, color: '#6B7280', marginBottom: 2 },
-  methodText: { fontSize: 12, color: '#4B5563', fontWeight: '500' }
+  methodText: { fontSize: 12, color: '#4B5563', fontWeight: '500' },
+  locationContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#F3F4F6' },
+  locationText: { fontSize: 12, color: '#6B7280' },
+  mapLinkText: { fontSize: 12, color: '#3B82F6', fontWeight: 'bold' },
+  locationUnavailableText: { fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#F3F4F6' }
 });

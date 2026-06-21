@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
 import { useAlert } from '../context/AlertContext';
+import { getCurrentLocationForAlert } from '../utils/location';
 
 export const SOSScreen: React.FC = () => {
   const { createAlert } = useAlert();
@@ -10,6 +11,7 @@ export const SOSScreen: React.FC = () => {
   const [status, setStatus] = useState<'COUNTING_DOWN' | 'ACTIVE' | 'CANCELLED'>('COUNTING_DOWN');
   const [message, setMessage] = useState('SOS will be sent in 5 seconds');
   const [demoNote, setDemoNote] = useState('');
+  const [locationStatus, setLocationStatus] = useState('');
   
   const hasCreatedAlert = useRef(false);
 
@@ -23,9 +25,31 @@ export const SOSScreen: React.FC = () => {
     } else if (status === 'COUNTING_DOWN' && countdown === 0) {
       if (!hasCreatedAlert.current) {
         hasCreatedAlert.current = true;
-        createAlert('MANUAL_SOS', 'ACTIVE', 'SOS Alert Sent');
         setStatus('ACTIVE');
         setMessage('SOS Alert Sent');
+        setLocationStatus('Getting your location...');
+        
+        getCurrentLocationForAlert().then(locationData => {
+          if (locationData && !locationData.permissionDenied) {
+            createAlert({
+              triggerType: 'MANUAL_SOS',
+              status: 'ACTIVE',
+              visibleMessage: 'SOS Alert Sent',
+              cancelMethod: 'NONE',
+              location: locationData
+            });
+            setLocationStatus('Location attached ✓');
+          } else {
+            createAlert({
+              triggerType: 'MANUAL_SOS',
+              status: 'ACTIVE',
+              visibleMessage: 'SOS Alert Sent',
+              cancelMethod: 'NONE',
+              location: locationData || undefined
+            });
+            setLocationStatus('Location unavailable — alert still sent');
+          }
+        });
       }
     }
     return () => clearTimeout(timer);
@@ -38,13 +62,23 @@ export const SOSScreen: React.FC = () => {
       hasCreatedAlert.current = true;
       setStatus('CANCELLED');
       setMessage('SOS cancelled');
-      createAlert('MANUAL_SOS', 'CANCELLED', 'SOS cancelled', 'REAL_PIN');
+      createAlert({
+        triggerType: 'MANUAL_SOS',
+        status: 'CANCELLED',
+        visibleMessage: 'SOS cancelled',
+        cancelMethod: 'REAL_PIN'
+      });
     } else if (pin === '4321') {
       hasCreatedAlert.current = true;
       setStatus('CANCELLED');
       setMessage('SOS cancelled');
       setDemoNote('Demo note: duress alert saved silently in Alert History.');
-      createAlert('MANUAL_SOS', 'SILENT_DURESS_ACTIVE', 'SOS cancelled', 'DURESS_PIN');
+      createAlert({
+        triggerType: 'MANUAL_SOS',
+        status: 'SILENT_DURESS_ACTIVE',
+        visibleMessage: 'SOS cancelled',
+        cancelMethod: 'DURESS_PIN'
+      });
     } else {
       Alert.alert('Invalid PIN', 'The PIN you entered is incorrect.');
     }
@@ -59,6 +93,10 @@ export const SOSScreen: React.FC = () => {
           <Text style={[styles.warningText, status === 'ACTIVE' && styles.activeText]}>
             {message}
           </Text>
+
+          {locationStatus !== '' && (
+            <Text style={styles.locationStatusText}>{locationStatus}</Text>
+          )}
 
           {status === 'COUNTING_DOWN' && (
             <Text style={styles.countdownNumber}>{countdown}</Text>
@@ -100,8 +138,9 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#FFF7F7' },
   container: { flexGrow: 1, padding: 24, justifyContent: 'center', alignItems: 'center' },
   title: { fontSize: 32, fontWeight: 'bold', color: '#DC2626', marginBottom: 16 },
-  warningText: { fontSize: 18, color: '#111827', textAlign: 'center', marginBottom: 24, fontWeight: '600' },
+  warningText: { fontSize: 18, color: '#111827', textAlign: 'center', marginBottom: 8, fontWeight: '600' },
   activeText: { color: '#DC2626', fontSize: 24, fontWeight: 'bold' },
+  locationStatusText: { fontSize: 14, color: '#6B7280', textAlign: 'center', marginBottom: 24, fontStyle: 'italic' },
   countdownNumber: { fontSize: 72, fontWeight: 'bold', color: '#DC2626', marginBottom: 32 },
   inputContainer: { width: '100%', alignItems: 'center', marginBottom: 32 },
   pinInput: { 
@@ -138,3 +177,4 @@ const styles = StyleSheet.create({
   helperText: { fontSize: 14, color: '#111827', marginBottom: 4 },
   helperTextMuted: { fontSize: 12, color: '#6B7280', marginTop: 8, fontStyle: 'italic' },
 });
+

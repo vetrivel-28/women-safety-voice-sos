@@ -3,12 +3,13 @@ import { SOSAlert, TriggerType, AlertStatus } from '../types';
 
 interface AlertContextType {
   alerts: SOSAlert[];
-  createAlert: (
-    triggerType: TriggerType, 
-    status: AlertStatus, 
-    visibleMessage: string, 
-    cancelMethod?: 'REAL_PIN' | 'DURESS_PIN' | 'NONE'
-  ) => string;
+  createAlert: (params: {
+    triggerType: TriggerType;
+    status: AlertStatus;
+    visibleMessage: string;
+    cancelMethod?: 'REAL_PIN' | 'DURESS_PIN' | 'NONE';
+    location?: SOSAlert['location'];
+  }) => string;
   updateAlert: (alertId: string, updates: Partial<SOSAlert>) => void;
   resolveAlert: (alertId: string) => void;
   clearAlerts?: () => void;
@@ -19,12 +20,19 @@ const AlertContext = createContext<AlertContextType | undefined>(undefined);
 export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [alerts, setAlerts] = useState<SOSAlert[]>([]);
 
-  const createAlert = (
-    triggerType: TriggerType, 
-    status: AlertStatus, 
-    visibleMessage: string, 
-    cancelMethod?: 'REAL_PIN' | 'DURESS_PIN' | 'NONE'
-  ): string => {
+  const createAlert = ({
+    triggerType,
+    status,
+    visibleMessage,
+    cancelMethod,
+    location
+  }: {
+    triggerType: TriggerType;
+    status: AlertStatus;
+    visibleMessage: string;
+    cancelMethod?: 'REAL_PIN' | 'DURESS_PIN' | 'NONE';
+    location?: SOSAlert['location'];
+  }): string => {
     const id = Date.now().toString();
     const newAlert: SOSAlert = {
       id,
@@ -33,6 +41,7 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: new Date().toISOString(),
       visibleMessage,
       cancelMethod,
+      location,
       ...(status === 'CANCELLED' || status === 'SILENT_DURESS_ACTIVE' ? { cancelledAt: new Date().toISOString() } : {})
     };
     
