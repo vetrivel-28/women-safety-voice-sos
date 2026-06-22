@@ -20,13 +20,24 @@ export async function getCurrentLocationForAlert(): Promise<{
       };
     }
 
+    // Try to get a cached location first as a quick fallback
+    const cachedLocation = await Location.getLastKnownPositionAsync();
+    if (cachedLocation) {
+      return {
+        latitude: cachedLocation.coords.latitude,
+        longitude: cachedLocation.coords.longitude,
+        mapLink: `https://www.google.com/maps?q=${cachedLocation.coords.latitude},${cachedLocation.coords.longitude}`,
+        capturedAt: new Date().toISOString()
+      };
+    }
+
     const locationPromise = Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.Balanced,
     });
 
-    // 4 second timeout
+    // 10 second timeout for cold starts
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Location request timed out')), 4000)
+      setTimeout(() => reject(new Error('Location request timed out')), 10000)
     );
 
     const location = await Promise.race([locationPromise, timeoutPromise]) as Location.LocationObject;

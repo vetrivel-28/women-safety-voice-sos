@@ -5,6 +5,8 @@ import { useContacts } from '../context/ContactsContext';
 export const ContactsScreen: React.FC = () => {
   const { getTopFiveContacts, addContact, deleteContact } = useContacts();
 
+  console.log("CONTACTS_SCREEN_VERSION_1");
+
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [relationship, setRelationship] = useState('');
@@ -59,28 +61,36 @@ export const ContactsScreen: React.FC = () => {
           <Text style={styles.subtitle}>Add trusted people who should receive alerts.</Text>
 
           <View style={styles.formCard}>
+            <Text style={styles.inputLabel}>Contact Name *</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { color: '#111827' }]}
               placeholder="Name *"
+              placeholderTextColor="#6B7280"
               value={name}
               onChangeText={setName}
             />
+            <Text style={styles.inputLabel}>Phone Number *</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { color: '#111827' }]}
               placeholder="Phone number *"
+              placeholderTextColor="#6B7280"
               keyboardType="phone-pad"
               value={phone}
               onChangeText={setPhone}
             />
+            <Text style={styles.inputLabel}>Relationship</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { color: '#111827' }]}
               placeholder="Relationship"
+              placeholderTextColor="#6B7280"
               value={relationship}
               onChangeText={setRelationship}
             />
+            <Text style={styles.inputLabel}>Priority</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { color: '#111827' }]}
               placeholder="Priority"
+              placeholderTextColor="#6B7280"
               keyboardType="numeric"
               value={priorityStr}
               onChangeText={setPriorityStr}
@@ -153,6 +163,13 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     fontSize: 16,
     backgroundColor: '#F9FAFB'
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 6,
+    marginLeft: 4,
   },
   buttonRow: { flexDirection: 'row', gap: 12 },
   addButton: {

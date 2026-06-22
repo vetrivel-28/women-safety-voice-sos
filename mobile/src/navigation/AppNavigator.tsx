@@ -1,4 +1,5 @@
 import React from 'react';
+import * as Linking from 'expo-linking';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types';
 
@@ -10,13 +11,60 @@ import { SafeWindowScreen } from '../screens/SafeWindowScreen';
 import { DeadManCheckInScreen } from '../screens/DeadManCheckInScreen';
 import { AlertHistoryScreen } from '../screens/AlertHistoryScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
+import LoginScreen from '../screens/LoginScreen';
+import { supabase } from '../lib/supabaseClient';
+import { Session } from '@supabase/supabase-js';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export const AppNavigator = () => {
+  const [session, setSession] = React.useState<Session | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    const handleDeepLink = async ({ url }: { url: string }) => {
+      if (!url) return;
+      const match = url.match(/#access_token=([^&]+)/);
+      const refreshTokenMatch = url.match(/&refresh_token=([^&]+)/);
+      
+      if (match && refreshTokenMatch) {
+        const access_token = match[1];
+        const refresh_token = refreshTokenMatch[1];
+        await supabase.auth.setSession({
+          access_token,
+          refresh_token,
+        });
+      }
+    };
+
+    const urlSubscription = Linking.addEventListener('url', handleDeepLink);
+    
+    Linking.getInitialURL().then((url: string | null) => {
+      if (url) handleDeepLink({ url });
+    });
+
+    return () => {
+      subscription.unsubscribe();
+      urlSubscription.remove();
+    };
+  }, []);
+
+  if (loading) {
+    return null; // Or a simple loading screen
+  }
+
   return (
     <Stack.Navigator
-      initialRouteName="Home"
+      initialRouteName={session ? "Home" : "Login"}
       screenOptions={{
         headerStyle: {
           backgroundColor: '#FFF7F7',
@@ -25,21 +73,30 @@ export const AppNavigator = () => {
         headerTitleStyle: {
           fontWeight: 'bold',
         },
-        headerBackTitleVisible: false,
       }}
     >
-      <Stack.Screen 
-        name="Home" 
-        component={HomeScreen} 
-        options={{ headerShown: false }} 
-      />
-      <Stack.Screen name="SOS" component={SOSScreen} options={{ title: 'Manual SOS' }} />
-      <Stack.Screen name="SilentSOS" component={SilentSOSScreen} options={{ title: 'Silent SOS' }} />
-      <Stack.Screen name="Contacts" component={ContactsScreen} options={{ title: 'Emergency Contacts' }} />
-      <Stack.Screen name="SafeWindow" component={SafeWindowScreen} options={{ title: 'Safe Window' }} />
-      <Stack.Screen name="DeadManCheckIn" component={DeadManCheckInScreen} options={{ title: 'Dead Man Check-in' }} />
-      <Stack.Screen name="AlertHistory" component={AlertHistoryScreen} options={{ title: 'Alert History' }} />
-      <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
+      {!session ? (
+        <Stack.Screen 
+          name="Login" 
+          component={LoginScreen} 
+          options={{ headerShown: false }} 
+        />
+      ) : (
+        <>
+          <Stack.Screen 
+            name="Home" 
+            component={HomeScreen} 
+            options={{ headerShown: false }} 
+          />
+          <Stack.Screen name="SOS" component={SOSScreen} options={{ title: 'Manual SOS' }} />
+          <Stack.Screen name="SilentSOS" component={SilentSOSScreen} options={{ title: 'Silent SOS' }} />
+          <Stack.Screen name="Contacts" component={ContactsScreen} options={{ title: 'Emergency Contacts' }} />
+          <Stack.Screen name="SafeWindow" component={SafeWindowScreen} options={{ title: 'Safe Window' }} />
+          <Stack.Screen name="DeadManCheckIn" component={DeadManCheckInScreen} options={{ title: 'Dead Man Check-in' }} />
+          <Stack.Screen name="AlertHistory" component={AlertHistoryScreen} options={{ title: 'Alert History' }} />
+          <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
+        </>
+      )}
     </Stack.Navigator>
   );
 };

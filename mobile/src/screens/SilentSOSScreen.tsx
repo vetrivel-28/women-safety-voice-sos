@@ -105,8 +105,9 @@ export const SilentSOSScreen: React.FC = () => {
           {status === 'COUNTING_DOWN' && (
             <View style={styles.inputContainer}>
               <TextInput
-                style={styles.pinInput}
+                style={[styles.pinInput, { color: '#111827' }]}
                 placeholder="Enter PIN"
+                placeholderTextColor="#6B7280"
                 keyboardType="numeric"
                 secureTextEntry
                 value={pin}

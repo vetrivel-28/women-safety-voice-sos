@@ -38,21 +38,17 @@ def valid_user(supabase):
 @pytest.fixture(scope="module")
 def guardian_user(supabase):
     """
-    Login using an existing guardian account or create one.
+    Login using a pre-created guardian account to avoid rate limits.
     """
-    import uuid
-    dummy_email = f"guardian_{uuid.uuid4().hex[:8]}@example.com"
-    dummy_password = "TestPassword123!"
-    
-    auth_response = supabase.auth.sign_up({
-        "email": dummy_email,
-        "password": dummy_password
+    auth = supabase.auth.sign_in_with_password({
+        "email": "guardian1@example.com",
+        "password": "TestPassword123!"
     })
     
     return {
-        "token": auth_response.session.access_token,
-        "user_id": auth_response.user.id,
-        "email": dummy_email
+        "token": auth.session.access_token,
+        "user_id": auth.user.id,
+        "email": auth.user.email
     }
 
 
@@ -205,12 +201,12 @@ def test_sos_alert_creation_works(valid_user):
 
 def test_guardian_alert_visibility_rls(valid_user, guardian_user):
     # Guardian logs in and queries sos_alerts via Supabase client directly
-    import os
     from supabase import create_client
+    from app.core.config import settings
     
     # We need a new client authenticated as the guardian to test RLS
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_ANON_KEY")
+    url = settings.SUPABASE_URL
+    key = settings.SUPABASE_ANON_KEY
     guardian_client = create_client(url, key)
     guardian_client.auth.set_session(guardian_user["token"], "")
     
@@ -225,11 +221,11 @@ def test_guardian_alert_visibility_rls(valid_user, guardian_user):
 
 
 def test_guardian_cannot_modify_alerts(valid_user, guardian_user):
-    import os
     from supabase import create_client
+    from app.core.config import settings
     
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_ANON_KEY")
+    url = settings.SUPABASE_URL
+    key = settings.SUPABASE_ANON_KEY
     guardian_client = create_client(url, key)
     guardian_client.auth.set_session(guardian_user["token"], "")
     

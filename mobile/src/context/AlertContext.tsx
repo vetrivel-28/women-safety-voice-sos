@@ -1,5 +1,6 @@
 import React, { createContext, useState, useContext } from 'react';
 import { SOSAlert, TriggerType, AlertStatus } from '../types';
+import { supabase } from '../lib/supabaseClient';
 
 interface AlertContextType {
   alerts: SOSAlert[];
@@ -46,6 +47,44 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
     
     setAlerts(prev => [newAlert, ...prev]);
+    
+    // Silently attempt to sync to backend
+    const syncToBackend = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+        const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://10.195.72.191:8000';
+        
+        await fetch(`${apiUrl}/api/alerts`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({
+            trigger_type: triggerType,
+            status: status,
+            cancel_method: cancelMethod || 'NONE',
+            visible_message: visibleMessage,
+            latitude: location?.latitude,
+            longitude: location?.longitude,
+            map_link: location?.mapLink
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+      } catch (err) {
+        // Silently fail as requested
+        console.log('Backend sync failed silently', err);
+      }
+    };
+    
+    syncToBackend();
+    
     return id;
   };
 

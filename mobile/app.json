@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "SafeHer",
+    "slug": "safeher",
+    "scheme": "safeher",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -13,6 +14,7 @@
       }
     },
     "android": {
+      "package": "com.safeher.app",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -34,7 +36,8 @@
         {
           "locationAlwaysAndWhenInUsePermission": "SafeHer uses your location to attach it to SOS alerts so your contacts know where you are."
         }
-      ]
+      ],
+      "expo-secure-store"
     ]
   }
 }
