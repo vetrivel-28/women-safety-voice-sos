@@ -4,6 +4,7 @@ import { useAlert } from '../context/AlertContext';
 import { getCurrentLocationForAlert } from '../utils/location';
 
 export const SOSScreen: React.FC = () => {
+  Alert.alert("DEBUG_BUILD", "SOSScreen loaded");
   const { createAlert } = useAlert();
   
   const [countdown, setCountdown] = useState(5);
@@ -29,7 +30,13 @@ export const SOSScreen: React.FC = () => {
         setMessage('SOS Alert Sent');
         setLocationStatus('Getting your location...');
         
+        console.log("SOS_SCREEN: countdown reached zero");
+        console.log("SOS_SCREEN: requesting location");
+        Alert.alert("DEBUG_BUILD", "Countdown reached zero");
         getCurrentLocationForAlert().then(locationData => {
+          Alert.alert("DEBUG_BUILD", "Location promise resolved");
+          console.log("SOS_SCREEN: location promise resolved");
+          console.log("SOS_SCREEN: locationData =", JSON.stringify(locationData));
           if (locationData && !locationData.permissionDenied) {
             createAlert({
               triggerType: 'MANUAL_SOS',
@@ -49,6 +56,10 @@ export const SOSScreen: React.FC = () => {
             });
             setLocationStatus('Location unavailable — alert still sent');
           }
+        }).catch(error => {
+          Alert.alert("DEBUG_BUILD", "Location promise failed");
+          console.log("SOS_SCREEN: location promise failed");
+          console.log("SOS_SCREEN: error =", error);
         });
       }
     }

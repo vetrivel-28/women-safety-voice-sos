@@ -8,7 +8,9 @@ export async function getCurrentLocationForAlert(): Promise<{
   permissionDenied?: boolean;
 } | null> {
   try {
+    console.log("LOCATION_DEBUG: requesting permission");
     const { status } = await Location.requestForegroundPermissionsAsync();
+    console.log("LOCATION_DEBUG: permission status =", status);
     
     if (status !== 'granted') {
       return {
@@ -21,8 +23,10 @@ export async function getCurrentLocationForAlert(): Promise<{
     }
 
     // Try to get a cached location first as a quick fallback
+    console.log("LOCATION_DEBUG: checking cached location");
     const cachedLocation = await Location.getLastKnownPositionAsync();
     if (cachedLocation) {
+      console.log("LOCATION_DEBUG: using cached location");
       return {
         latitude: cachedLocation.coords.latitude,
         longitude: cachedLocation.coords.longitude,
@@ -31,6 +35,7 @@ export async function getCurrentLocationForAlert(): Promise<{
       };
     }
 
+    console.log("LOCATION_DEBUG: requesting GPS location");
     const locationPromise = Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.Balanced,
     });
@@ -41,6 +46,7 @@ export async function getCurrentLocationForAlert(): Promise<{
     );
 
     const location = await Promise.race([locationPromise, timeoutPromise]) as Location.LocationObject;
+    console.log("LOCATION_DEBUG: GPS location received");
 
     return {
       latitude: location.coords.latitude,
@@ -50,6 +56,8 @@ export async function getCurrentLocationForAlert(): Promise<{
     };
   } catch (error) {
     // If anything fails (timeout, GPS disabled, etc.), return null
+    console.log("LOCATION_DEBUG: location failed");
+    console.log("LOCATION_DEBUG: error =", error);
     return null;
   }
 }

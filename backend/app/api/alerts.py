@@ -22,25 +22,31 @@ def create_alert(alert_in: AlertCreate, auth_data: dict = Depends(get_current_us
     service_client = get_service_role_client()
     
     alert_data = {
-    "user_id": user.id,
-    "trigger_type": alert_in.trigger_type,
-    "status": alert_in.status,
-    "cancel_method": alert_in.cancel_method,
-    "visible_message": alert_in.visible_message,
-    "location_lat": alert_in.latitude,
-    "location_long": alert_in.longitude,
-    "location_map_link": alert_in.map_link,
-}
+        "user_id": user.id,
+        "trigger_type": alert_in.trigger_type.value,
+        "status": alert_in.status.value,
+        "cancel_method": alert_in.cancel_method.value if alert_in.cancel_method else "NONE",
+        "visible_message": alert_in.visible_message,
+        "location_lat": alert_in.latitude,
+        "location_long": alert_in.longitude,
+        "location_map_link": alert_in.map_link,
+    }
+    
+    logger.info("SOS_DEBUG: request received")
+    logger.info(f"user={user.id}")
+    logger.info(f"payload={alert_data}")
     
     try:
         result = service_client.table("sos_alerts").insert(alert_data).execute()
+        logger.info(f"insert result: {result.data}")
+        
         if not result.data:
             raise HTTPException(status_code=500, detail="Failed to insert alert")
         
         logger.info(f"Successfully created alert {result.data[0]['id']} for user {user.id}")
         return result.data[0]
     except Exception as e:
-        logger.error(f"Error inserting alert: {str(e)}", exc_info=True)
+        logger.error(f"insert exception: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not save alert to database"

@@ -45,21 +45,39 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       location,
       ...(status === 'CANCELLED' || status === 'SILENT_DURESS_ACTIVE' ? { cancelledAt: new Date().toISOString() } : {})
     };
-    
+
     setAlerts(prev => [newAlert, ...prev]);
-    
+    console.log("SOS_DEBUG: createAlert called");
+    console.log("SOS_DEBUG: triggerType =", triggerType);
+
     // Silently attempt to sync to backend
     const syncToBackend = async () => {
+      console.log("SOS_DEBUG: syncToBackend started");
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        console.log("SOS_DEBUG: session exists =", !!session, "| sessionError =", sessionError?.message);
         
+        if (!session) {
+          console.log("SOS_DEBUG: aborted syncToBackend because session is null");
+          return;
+        }
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-        const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://10.195.72.191:8000';
-        
-        await fetch(`${apiUrl}/api/alerts`, {
+        const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://10.187.138.191:8000';
+        console.log("SOS_DEBUG: apiUrl =", apiUrl);
+        console.log("SOS_DEBUG: calling POST /api/alerts with payload:", JSON.stringify({
+            trigger_type: triggerType,
+            status: status,
+            cancel_method: cancelMethod || 'NONE',
+            visible_message: visibleMessage,
+            latitude: location?.latitude,
+            longitude: location?.longitude,
+            map_link: location?.mapLink
+        }));
+
+        const response = await fetch(`${apiUrl}/api/alerts`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -77,14 +95,22 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           signal: controller.signal
         });
         clearTimeout(timeoutId);
+
+        console.log("SOS_DEBUG: response status =", response.status);
+        const errText = await response.text();
+        console.log("SOS_DEBUG: response text =", errText);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${errText}`);
+        }
       } catch (err) {
-        // Silently fail as requested
+        // Silently fail as requested, but log the real error
         console.log('Backend sync failed silently', err);
       }
     };
-    
+
     syncToBackend();
-    
+
     return id;
   };
 
