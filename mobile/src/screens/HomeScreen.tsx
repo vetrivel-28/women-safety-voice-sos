@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types';
@@ -7,14 +7,11 @@ import { useContacts } from '../context/ContactsContext';
 import { useSafeWindow } from '../context/SafeWindowContext';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SafetyCard } from '../components/SafetyCard';
-
-// Safely isolate Person A's AlertContext
-let useAlert: any = null;
-try {
-  useAlert = require('../context/AlertContext').useAlert;
-} catch (e) {
-  // AlertContext not ready
-}
+import { QuickActionCard } from '../components/QuickActionCard';
+import { SOSButton } from '../components/SOSButton';
+import { useAlert } from '../context/AlertContext';
+import { SectionHeader } from '../components/SectionHeader';
+import { supabase } from '../lib/supabaseClient';
 
 type HomeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -22,26 +19,16 @@ export default function HomeScreen() {
   const navigation = useNavigation<HomeScreenNavigationProp>();
   const { contacts } = useContacts();
   const { safeWindow } = useSafeWindow();
+  const { createAlert } = useAlert();
+  const [session, setSession] = useState<any>(null);
 
-  let alerts = [];
-  try {
-    if (useAlert) {
-      const alertContext = useAlert();
-      alerts = alertContext?.alerts || [];
-    }
-  } catch (e) {
-    // Context provider not mounted yet
-  }
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
+  }, []);
 
-  const contactsStatus = contacts.length === 0 
-    ? '0 contacts added'
-    : contacts.length === 1 
-      ? '1 contact added' 
-      : `${contacts.length} contacts added`;
-
-  const alertsStatus = alerts.length === 0 
-    ? 'No alerts yet' 
-    : `${alerts.length} alerts recorded`;
+  const handleManualSOS = () => {
+    navigation.navigate('SOS');
+  };
 
   const getSafeWindowStatusText = () => {
     switch (safeWindow.status) {
@@ -52,72 +39,71 @@ export default function HomeScreen() {
     }
   };
 
-  const getDeadManStatusText = () => {
-    switch (safeWindow.status) {
-      case 'ACTIVE': return 'Active';
-      case 'MISSED_CHECKIN': return 'Missed';
-      case 'COMPLETED': return 'Completed';
-      default: return 'Not started';
-    }
-  };
+  const isSynced = !!session;
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         
         <View style={styles.header}>
-          <Text style={styles.title}>SafeHer</Text>
-          <Text style={styles.subtitle}>V1 Safety Dashboard</Text>
-          <View style={styles.statusPill}>
-            <Text style={styles.statusText}>Normal Mode</Text>
+          <View>
+            <Text style={styles.title}>SafeHer</Text>
+            <Text style={styles.subtitle}>Emergency help, quietly when needed.</Text>
           </View>
-          <Text style={styles.testModeText}>Expo Go phone test active</Text>
+          <View style={styles.pillsContainer}>
+             {/* Technical sync pill removed from home screen per PRD */}
+          </View>
         </View>
 
-        <View style={styles.section}>
-          <PrimaryButton 
-            title="Manual SOS" 
-            variant="emergency" 
-            onPress={() => navigation.navigate('SOS')} 
+        <View style={styles.sosContainer}>
+          <SOSButton 
+            title="SOS" 
+            subtitle="Slide or Tap to Alert" 
+            onPress={handleManualSOS} 
           />
           <PrimaryButton 
-            title="Silent SOS" 
+            title="Trigger Silent SOS" 
             variant="dark" 
             onPress={() => navigation.navigate('SilentSOS')} 
+            style={styles.silentButton}
           />
         </View>
 
-        <View style={styles.section}>
-          <SafetyCard
-            title="Safe Window"
-            subtitle="Schedule a safety monitoring window"
-            status={getSafeWindowStatusText()}
-            onPress={() => navigation.navigate('SafeWindow')}
-          />
-          <SafetyCard
-            title="Dead Man Check-in"
-            subtitle="Ask for safety confirmation during travel"
-            status={getDeadManStatusText()}
-            onPress={() => navigation.navigate('DeadManCheckIn')}
-          />
-          <SafetyCard
-            title="Emergency Contacts"
-            subtitle="Manage trusted contacts"
-            status={contactsStatus}
-            onPress={() => navigation.navigate('Contacts')}
-          />
-          <SafetyCard
-            title="Alert History"
-            subtitle="View past SOS activity"
-            status={alertsStatus}
-            onPress={() => navigation.navigate('AlertHistory')}
-          />
-          <SafetyCard
-            title="Settings"
-            subtitle="PINs, privacy, and app preferences"
-            onPress={() => navigation.navigate('Settings')}
-          />
-        </View>
+        <SectionHeader title="Active Protection" subtitle="Monitoring your safety status" />
+        
+        <SafetyCard
+          title="Journey Mode"
+          subtitle="Share your route with trusted guardians"
+          status={getSafeWindowStatusText()}
+          onPress={() => navigation.navigate('SafeWindow')}
+        />
+
+        <SectionHeader title="Quick Actions" />
+
+        <QuickActionCard
+          title="Check-In Timer"
+          subtitle="Set a timer during travel"
+          icon="⏳"
+          onPress={() => navigation.navigate('DeadManCheckIn')}
+        />
+        <QuickActionCard
+          title="Trusted Guardians"
+          subtitle={`${contacts.length} guardians active`}
+          icon="🛡️"
+          onPress={() => navigation.navigate('Contacts')}
+        />
+        <QuickActionCard
+          title="Alert History"
+          subtitle="Review past events"
+          icon="📋"
+          onPress={() => navigation.navigate('AlertHistory')}
+        />
+        <QuickActionCard
+          title="Privacy & Safety"
+          subtitle="PINs, account, and preferences"
+          icon="⚙️"
+          onPress={() => navigation.navigate('Settings')}
+        />
         
       </ScrollView>
     </SafeAreaView>
@@ -125,13 +111,52 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#FFF7F7' },
-  container: { padding: 24, paddingTop: 60, paddingBottom: 48 },
-  header: { alignItems: 'center', marginBottom: 32 },
-  title: { fontSize: 32, fontWeight: 'bold', color: '#111827', marginBottom: 4 },
-  subtitle: { fontSize: 18, color: '#6B7280', marginBottom: 12 },
-  statusPill: { backgroundColor: '#16A34A', paddingVertical: 6, paddingHorizontal: 16, borderRadius: 20, marginBottom: 8 },
-  statusText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
-  testModeText: { fontSize: 12, color: '#6B7280', fontStyle: 'italic' },
-  section: { marginBottom: 24, width: '100%' },
+  safeArea: { 
+    flex: 1, 
+    backgroundColor: '#FAFAF9' 
+  },
+  container: { 
+    padding: 24, 
+    paddingTop: Platform.OS === 'ios' ? 20 : 60, 
+    paddingBottom: 48 
+  },
+  header: { 
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 40 
+  },
+  title: { 
+    fontSize: 28, 
+    fontWeight: '900', 
+    color: '#1E293B', 
+    marginBottom: 4,
+    letterSpacing: -0.5,
+  },
+  subtitle: { 
+    fontSize: 15, 
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  pillsContainer: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  sosContainer: { 
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 20,
+    backgroundColor: '#FFFFFF',
+    padding: 30,
+    borderRadius: 32,
+    shadowColor: '#1E293B',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.05,
+    shadowRadius: 20,
+    elevation: 5,
+  },
+  silentButton: {
+    marginTop: 24,
+    width: '100%',
+  },
 });

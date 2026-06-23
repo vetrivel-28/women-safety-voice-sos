@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, Alert, Platform } from 'react-native';
 import { useSafeWindow } from '../context/SafeWindowContext';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { useNavigation } from '@react-navigation/native';
@@ -35,49 +35,70 @@ export const DeadManCheckInScreen: React.FC = () => {
 
   const handleSafe = () => {
     markCheckInSafe();
-    Alert.alert('Check-in confirmed', 'Next check-in scheduled.');
+    Alert.alert('Confirmed', 'Your safety is confirmed. Next check-in scheduled.');
   };
 
   const handleSimulateMissed = () => {
     markMissedCheckIn();
-    Alert.alert('Missed check-in detected', 'Silent SOS integration pending until AlertContext is merged.');
+    Alert.alert('Missed check-in', 'Silent SOS has been triggered.');
   };
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Dead Man Check-in</Text>
-        <Text style={styles.subtitle}>Confirm you are safe during an active Safe Window.</Text>
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Check-In Timer</Text>
+          <Text style={styles.subtitle}>Periodic safety check-ins. Missed check-ins automatically alert guardians.</Text>
+        </View>
 
         {safeWindow.status === 'INACTIVE' || safeWindow.status === 'COMPLETED' ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>No active Safe Window</Text>
-            <Text style={styles.cardText}>Start a Safe Window first to enable check-ins.</Text>
-            <View style={{ marginTop: 16 }}>
-              <PrimaryButton 
-                title="Go to Safe Window" 
-                variant="dark" 
-                onPress={() => navigation.navigate('SafeWindow')} 
-              />
+            <View style={styles.iconCircle}>
+               <Text style={styles.icon}>🕒</Text>
             </View>
+            <Text style={styles.cardTitle}>No Active Timer</Text>
+            <Text style={styles.cardText}>Start a Journey or a Check-In Timer to enable automatic check-ins.</Text>
+            <PrimaryButton 
+              title="Start Timer (via Journey Mode)" 
+              variant="dark" 
+              onPress={() => navigation.navigate('SafeWindow')} 
+              style={{ marginTop: 24 }}
+            />
           </View>
         ) : safeWindow.status === 'ACTIVE' ? (
           <View style={styles.activeContainer}>
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Are you safe?</Text>
-              <Text style={styles.countdownText}>
-                Check-in due in: <Text style={styles.countdownNumber}>{formatTime(timeLeft)}</Text>
-              </Text>
+            <View style={styles.timerCard}>
+              <Text style={styles.timerSubtitle}>Check-in Required In</Text>
+              <Text style={styles.timerText}>{formatTime(timeLeft)}</Text>
             </View>
 
-            <PrimaryButton title="Yes, I am safe" variant="safe" onPress={handleSafe} />
-            <View style={{ height: 16 }} />
-            <PrimaryButton title="Simulate missed check-in" variant="warning" onPress={handleSimulateMissed} />
+            <View style={styles.actionBox}>
+              <Text style={styles.actionTitle}>Are you safe?</Text>
+              <Text style={styles.actionDesc}>Tap below to reset the timer and confirm your safety.</Text>
+              <PrimaryButton title="Yes, I am safe" variant="primary" onPress={handleSafe} />
+              
+              <View style={styles.divider} />
+              
+              <PrimaryButton title="Trigger Alert Now" variant="outline" onPress={handleSimulateMissed} />
+            </View>
+            
+            <View style={styles.infoBox}>
+               <Text style={styles.note}>
+                 If the timer expires, SafeHer will automatically alert your primary guardian.
+               </Text>
+            </View>
           </View>
         ) : safeWindow.status === 'MISSED_CHECKIN' ? (
-          <View style={[styles.card, styles.errorCard]}>
-            <Text style={styles.errorTitle}>Missed check-in detected</Text>
-            <Text style={styles.errorText}>Silent SOS integration pending until Person A’s AlertContext is merged.</Text>
+          <View style={styles.errorCard}>
+            <Text style={styles.errorIcon}>⚠️</Text>
+            <Text style={styles.errorTitle}>Missed Check-in</Text>
+            <Text style={styles.errorText}>A Silent SOS has been triggered and your guardians have been notified.</Text>
+            <PrimaryButton 
+              title="Manage Alert" 
+              variant="outline" 
+              onPress={() => navigation.navigate('SafeWindow')} 
+              style={{ marginTop: 24 }}
+            />
           </View>
         ) : null}
 
@@ -87,23 +108,54 @@ export const DeadManCheckInScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#FFF7F7' },
-  container: { flexGrow: 1, padding: 24 },
-  title: { fontSize: 28, fontWeight: 'bold', color: '#111827', marginBottom: 4 },
-  subtitle: { fontSize: 16, color: '#6B7280', marginBottom: 24 },
+  safeArea: { flex: 1, backgroundColor: '#FAFAF9' },
+  container: { flexGrow: 1, padding: 24, paddingTop: Platform.OS === 'ios' ? 20 : 60 },
+  header: { marginBottom: 32 },
+  title: { fontSize: 32, fontWeight: '900', color: '#1E293B', marginBottom: 4, letterSpacing: -0.5 },
+  subtitle: { fontSize: 16, color: '#64748B', fontWeight: '500' },
   card: {
     backgroundColor: '#FFFFFF',
-    padding: 24,
-    borderRadius: 12,
-    marginBottom: 24,
-    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 1
+    padding: 32,
+    borderRadius: 24,
+    alignItems: 'center',
+    shadowColor: '#1E293B', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.05, shadowRadius: 16, elevation: 4,
+    borderWidth: 1, borderColor: '#F1F5F9'
   },
-  cardTitle: { fontSize: 20, fontWeight: 'bold', color: '#111827', marginBottom: 8, textAlign: 'center' },
-  cardText: { fontSize: 16, color: '#4B5563', textAlign: 'center' },
-  activeContainer: { marginTop: 8 },
-  countdownText: { fontSize: 18, color: '#4B5563', textAlign: 'center', marginTop: 16 },
-  countdownNumber: { fontWeight: 'bold', color: '#111827' },
-  errorCard: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5', borderWidth: 1 },
-  errorTitle: { fontSize: 20, fontWeight: 'bold', color: '#DC2626', marginBottom: 8, textAlign: 'center' },
-  errorText: { fontSize: 16, color: '#991B1B', textAlign: 'center' },
+  iconCircle: {
+    width: 80, height: 80, borderRadius: 40, backgroundColor: '#EEF2FF',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 20
+  },
+  icon: { fontSize: 40 },
+  cardTitle: { fontSize: 24, fontWeight: '800', color: '#1E293B', marginBottom: 12, textAlign: 'center' },
+  cardText: { fontSize: 15, color: '#64748B', textAlign: 'center', lineHeight: 22 },
+  activeContainer: { flex: 1 },
+  timerCard: {
+    backgroundColor: '#FFFBEB',
+    padding: 32,
+    borderRadius: 24,
+    alignItems: 'center',
+    marginBottom: 24,
+    borderWidth: 1, borderColor: '#FEF3C7',
+  },
+  timerSubtitle: { fontSize: 14, color: '#B45309', fontWeight: '700', textTransform: 'uppercase', marginBottom: 8 },
+  timerText: { fontSize: 56, fontWeight: '900', color: '#D97706', letterSpacing: -1 },
+  actionBox: {
+    backgroundColor: '#FFFFFF',
+    padding: 24,
+    borderRadius: 24,
+    shadowColor: '#1E293B', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.05, shadowRadius: 16, elevation: 4,
+    borderWidth: 1, borderColor: '#F1F5F9',
+    marginBottom: 24
+  },
+  actionTitle: { fontSize: 20, fontWeight: '800', color: '#1E293B', marginBottom: 8, textAlign: 'center' },
+  actionDesc: { fontSize: 14, color: '#64748B', textAlign: 'center', marginBottom: 24, lineHeight: 20 },
+  divider: { height: 1, backgroundColor: '#F1F5F9', marginVertical: 16 },
+  errorCard: {
+    backgroundColor: '#FEF2F2', borderColor: '#FECACA', borderWidth: 1, padding: 32, borderRadius: 24, alignItems: 'center'
+  },
+  errorIcon: { fontSize: 48, marginBottom: 16 },
+  errorTitle: { fontSize: 24, fontWeight: '800', color: '#DC2626', marginBottom: 12, textAlign: 'center' },
+  errorText: { fontSize: 15, color: '#991B1B', textAlign: 'center', lineHeight: 22 },
+  infoBox: { backgroundColor: '#F8FAFC', padding: 16, borderRadius: 12, width: '100%' },
+  note: { fontSize: 14, color: '#475569', textAlign: 'center', lineHeight: 20, fontWeight: '500' },
 });

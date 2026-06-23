@@ -6,6 +6,7 @@ interface ContactsContextType {
   addContact: (contactData: Omit<EmergencyContact, 'id' | 'createdAt'>) => void;
   deleteContact: (contactId: string) => void;
   updateContact: (contactId: string, updates: Partial<EmergencyContact>) => void;
+  setPrimaryContact: (contactId: string) => void;
   getPrimaryContact: () => EmergencyContact | undefined;
   getTopFiveContacts: () => EmergencyContact[];
 }
@@ -46,6 +47,19 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
   };
 
+  const setPrimaryContact = (contactId: string) => {
+    setContacts(prev => {
+      // Reassign priorities: target gets 1, others shift down
+      const updated = prev.map(c => {
+        if (c.id === contactId) return { ...c, priority: 1 };
+        // If they had priority 1, they become 2. Otherwise leave as is, and sort will handle the rest.
+        if (c.priority === 1) return { ...c, priority: 2 };
+        return c;
+      });
+      return updated.sort((a, b) => a.priority - b.priority);
+    });
+  };
+
   const getPrimaryContact = () => {
     if (contacts.length === 0) return undefined;
     return contacts[0]; // Already sorted by priority ascending
@@ -61,6 +75,7 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       addContact, 
       deleteContact, 
       updateContact,
+      setPrimaryContact,
       getPrimaryContact,
       getTopFiveContacts
     }}>

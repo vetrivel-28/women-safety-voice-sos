@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import auth, alerts, guardians
+from app.api import auth, alerts, guardians, sos
 from app.core.config import settings
 from app.db.client import get_supabase_client
 from contextlib import asynccontextmanager
@@ -44,7 +44,12 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(alerts.router)
 app.include_router(guardians.router)
+app.include_router(sos.router)
 
 @app.get("/")
 async def root():
     return {"message": "SafeHer API is running. Stage A Checkpoint."}
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "message": "Backend is healthy"}

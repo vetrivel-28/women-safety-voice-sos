@@ -12,7 +12,17 @@ export type RootStackParamList = {
 
 export type AlertStatus = 'ACTIVE' | 'CANCELLED' | 'SILENT_DURESS_ACTIVE' | 'RESOLVED';
 
-export type TriggerType = 'MANUAL_SOS' | 'SILENT_SOS';
+export type TriggerType = 
+  | 'MANUAL_SOS'
+  | 'SILENT_SOS'
+  | 'MISSED_CHECK_IN'
+  | 'SAFE_WINDOW_MISSED'
+  | 'ROUTE_DEVIATION'
+  | 'RISK_SCORE_HIGH'
+  | 'JOURNEY_MISSED_CHECKIN'
+  | 'DEAD_MAN_MISSED'
+  | 'GUARDIAN_NOTIFICATION_FAILED'
+  | 'GUARDIAN_NOTIFICATION_SENT';
 
 export interface SOSAlert {
   id: string;
@@ -30,12 +40,18 @@ export interface SOSAlert {
     capturedAt: string;
     permissionDenied?: boolean;
   };
+  syncStatus?: 'PENDING_SYNC' | 'SYNCED' | 'FAILED_SYNC';
+  backendId?: string;
+  lastSyncError?: string;
+  syncedAt?: string;
+  ownerUserId?: string;
 }
 
 export interface EmergencyContact {
   id: string;
   name: string;
   phone: string;
+  email?: string;
   relationship: string;
   priority: number;
   createdAt: string;
@@ -54,4 +70,7 @@ export interface SafeWindowState {
   lastCheckInAt: string | null;
   demoMode: boolean;
   missedCheckInAt?: string | null;
+  startLocation?: { latitude: number; longitude: number } | null;
+  destinationLocation?: { latitude: number; longitude: number } | null;
+  routeDeviationDetected?: boolean;
 }

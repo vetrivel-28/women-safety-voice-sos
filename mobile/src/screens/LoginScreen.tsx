@@ -2,12 +2,11 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { supabase } from '../lib/supabaseClient';
 import * as Linking from 'expo-linking';
+import { PrimaryButton } from '../components/PrimaryButton';
 
 export default function LoginScreen() {
   const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
-
-  console.log("LOGIN_SCREEN_VERSION_1");
 
   // Common
   const [email, setEmail] = useState('');
@@ -16,9 +15,6 @@ export default function LoginScreen() {
   // Register only
   const [fullName, setFullName] = useState('');
   const [mobileNumber, setMobileNumber] = useState('');
-  const [dob, setDob] = useState('');
-  const [emergencyContactName, setEmergencyContactName] = useState('');
-  const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
 
   async function signInWithEmail() {
     if (!email || !password) {
@@ -61,9 +57,6 @@ export default function LoginScreen() {
         data: {
           full_name: fullName,
           mobile_number: mobileNumber,
-          dob,
-          emergency_contact_name: emergencyContactName,
-          emergency_contact_phone: emergencyContactPhone,
         }
       }
     });
@@ -83,107 +76,96 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>SafeHer</Text>
-        <Text style={styles.subtitle}>{isLogin ? 'Welcome Back' : 'Create an Account'}</Text>
+        
+        <View style={styles.header}>
+          <View style={styles.iconWrapper}>
+            <Text style={styles.icon}>🛡️</Text>
+          </View>
+          <Text style={styles.title}>SafeHer</Text>
+          <Text style={styles.subtitle}>Emergency help, quietly when needed.</Text>
+        </View>
 
-        {!isLogin && (
-          <>
-            <Text style={styles.inputLabel}>Full Name *</Text>
-            <TextInput
-              style={[styles.input, { color: '#111827' }]}
-              onChangeText={setFullName}
-              value={fullName}
-              placeholder="Full Name *"
-              placeholderTextColor="#6B7280"
-              autoCapitalize="words"
-            />
-            <Text style={styles.inputLabel}>Phone Number *</Text>
-            <TextInput
-              style={[styles.input, { color: '#111827' }]}
-              onChangeText={setMobileNumber}
-              value={mobileNumber}
-              placeholder="Phone Number *"
-              placeholderTextColor="#6B7280"
-              keyboardType="phone-pad"
-            />
-          </>
-        )}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>{isLogin ? 'Welcome Back' : 'Create an Account'}</Text>
+          
+          <View style={styles.noticeBox}>
+            <Text style={styles.noticeText}>Secure your account to manage your trusted guardians.</Text>
+          </View>
 
-        <Text style={styles.inputLabel}>Email Address *</Text>
-        <TextInput
-          style={[styles.input, { color: '#111827' }]}
-          onChangeText={setEmail}
-          value={email}
-          placeholder="Email Address *"
-          placeholderTextColor="#6B7280"
-          autoCapitalize="none"
-          keyboardType="email-address"
-        />
-        <Text style={styles.inputLabel}>Password *</Text>
-        <TextInput
-          style={[styles.input, { color: '#111827' }]}
-          onChangeText={setPassword}
-          value={password}
-          secureTextEntry={true}
-          placeholder="Password *"
-          placeholderTextColor="#6B7280"
-          autoCapitalize="none"
-        />
-
-        {!isLogin && (
-          <>
-            <View style={styles.divider} />
-            <Text style={styles.sectionTitle}>Optional Details</Text>
-            <Text style={styles.inputLabel}>Date of Birth (Optional)</Text>
-            <TextInput
-              style={[styles.input, { color: '#111827' }]}
-              onChangeText={setDob}
-              value={dob}
-              placeholder="Date of Birth (YYYY-MM-DD)"
-              placeholderTextColor="#6B7280"
-            />
-            <Text style={styles.inputLabel}>Emergency Contact Name</Text>
-            <TextInput
-              style={[styles.input, { color: '#111827' }]}
-              onChangeText={setEmergencyContactName}
-              value={emergencyContactName}
-              placeholder="Emergency Contact Name"
-              placeholderTextColor="#6B7280"
-              autoCapitalize="words"
-            />
-            <Text style={styles.inputLabel}>Emergency Contact Phone</Text>
-            <TextInput
-              style={[styles.input, { color: '#111827' }]}
-              onChangeText={setEmergencyContactPhone}
-              value={emergencyContactPhone}
-              placeholder="Emergency Contact Phone"
-              placeholderTextColor="#6B7280"
-              keyboardType="phone-pad"
-            />
-          </>
-        )}
-
-        <View style={styles.buttonContainer}>
-          {isLogin ? (
+          {!isLogin && (
             <>
-              <TouchableOpacity style={styles.button} onPress={signInWithEmail} disabled={loading}>
-                {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Sign In</Text>}
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.linkButton} onPress={() => setIsLogin(false)} disabled={loading}>
-                <Text style={styles.linkButtonText}>Don't have an account? Sign Up</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              <TouchableOpacity style={styles.button} onPress={signUpWithEmail} disabled={loading}>
-                {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Create Account</Text>}
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.linkButton} onPress={() => setIsLogin(true)} disabled={loading}>
-                <Text style={styles.linkButtonText}>Already have an account? Sign In</Text>
-              </TouchableOpacity>
+              <Text style={styles.inputLabel}>Full Name</Text>
+              <TextInput
+                style={styles.input}
+                onChangeText={setFullName}
+                value={fullName}
+                placeholder="Jane Doe"
+                placeholderTextColor="#94A3B8"
+                autoCapitalize="words"
+              />
+              <Text style={styles.inputLabel}>Phone Number</Text>
+              <TextInput
+                style={styles.input}
+                onChangeText={setMobileNumber}
+                value={mobileNumber}
+                placeholder="+1 234 567 8900"
+                placeholderTextColor="#94A3B8"
+                keyboardType="phone-pad"
+              />
             </>
           )}
+
+          <Text style={styles.inputLabel}>Email Address</Text>
+          <TextInput
+            style={styles.input}
+            onChangeText={setEmail}
+            value={email}
+            placeholder="jane@example.com"
+            placeholderTextColor="#94A3B8"
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+          
+          <Text style={styles.inputLabel}>Password</Text>
+          <TextInput
+            style={styles.input}
+            onChangeText={setPassword}
+            value={password}
+            secureTextEntry={true}
+            placeholder="••••••••"
+            placeholderTextColor="#94A3B8"
+            autoCapitalize="none"
+          />
+
+          <View style={styles.buttonContainer}>
+            {isLogin ? (
+              <>
+                <PrimaryButton 
+                  title={loading ? "Authenticating..." : "Sign In"} 
+                  onPress={signInWithEmail} 
+                  disabled={loading} 
+                  variant="primary" 
+                />
+                <TouchableOpacity style={styles.linkButton} onPress={() => setIsLogin(false)} disabled={loading}>
+                  <Text style={styles.linkButtonText}>Don't have an account? <Text style={styles.linkBold}>Sign Up</Text></Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <PrimaryButton 
+                  title={loading ? "Creating..." : "Create Account"} 
+                  onPress={signUpWithEmail} 
+                  disabled={loading} 
+                  variant="primary" 
+                />
+                <TouchableOpacity style={styles.linkButton} onPress={() => setIsLogin(true)} disabled={loading}>
+                  <Text style={styles.linkButtonText}>Already have an account? <Text style={styles.linkBold}>Sign In</Text></Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
         </View>
+
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -192,74 +174,99 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFF7F7',
+    backgroundColor: '#FAFAF9', // Warm off-white
   },
   scrollContainer: {
     flexGrow: 1,
-    padding: 20,
+    padding: 24,
     justifyContent: 'center',
   },
+  header: {
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  iconWrapper: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  icon: {
+    fontSize: 36,
+  },
   title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#111827',
-    textAlign: 'center',
-    marginBottom: 10,
+    fontSize: 36,
+    fontWeight: '900',
+    color: '#1E293B',
+    letterSpacing: -0.5,
   },
   subtitle: {
-    fontSize: 18,
-    color: '#4B5563',
-    textAlign: 'center',
-    marginBottom: 30,
-  },
-  sectionTitle: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#4B5563',
-    marginBottom: 15,
+    color: '#64748B',
+    marginTop: 4,
   },
-  divider: {
-    height: 1,
-    backgroundColor: '#E5E7EB',
-    marginVertical: 20,
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 24,
+    shadowColor: '#1E293B',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.05,
+    shadowRadius: 20,
+    elevation: 4,
   },
-  input: {
-    backgroundColor: '#fff',
-    padding: 15,
+  cardTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#1E293B',
+    marginBottom: 20,
+  },
+  noticeBox: {
+    backgroundColor: '#F8FAFC',
+    padding: 12,
     borderRadius: 8,
-    marginBottom: 15,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderLeftWidth: 4,
+    borderLeftColor: '#4F46E5',
+    marginBottom: 20,
+  },
+  noticeText: {
+    fontSize: 13,
+    color: '#475569',
+    fontWeight: '500',
   },
   inputLabel: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 6,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 8,
     marginLeft: 4,
   },
-  buttonContainer: {
-    marginTop: 10,
-  },
-  button: {
-    backgroundColor: '#EF4444',
-    padding: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginBottom: 15,
-  },
-  buttonText: {
-    color: '#fff',
-    fontWeight: 'bold',
+  input: {
+    backgroundColor: '#F1F5F9',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 16,
     fontSize: 16,
+    color: '#1E293B',
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  buttonContainer: {
+    marginTop: 8,
   },
   linkButton: {
-    padding: 10,
+    padding: 16,
     alignItems: 'center',
   },
   linkButtonText: {
-    color: '#EF4444',
-    fontWeight: '600',
-    fontSize: 14,
+    color: '#64748B',
+    fontSize: 15,
+  },
+  linkBold: {
+    color: '#4F46E5',
+    fontWeight: '700',
   },
 });

@@ -1,8 +1,20 @@
-import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform, Alert } from 'react-native';
 import { supabase } from '../lib/supabaseClient';
+import { PrimaryButton } from '../components/PrimaryButton';
+import { SectionHeader } from '../components/SectionHeader';
 
 export const SettingsScreen: React.FC = () => {
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user?.email) {
+        setUserEmail(session.user.email);
+      }
+    });
+  }, []);
+
   const handleLogout = () => {
     Alert.alert(
       'Log Out',
@@ -25,57 +37,58 @@ export const SettingsScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Settings</Text>
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        
+        <View style={styles.header}>
+          <Text style={styles.title}>Settings</Text>
+          <Text style={styles.subtitle}>App preferences and account.</Text>
+        </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>1. Demo PINs</Text>
-          <View style={styles.card}>
-            <Text style={styles.listItem}>• Real Cancel PIN: <Text style={styles.bold}>1234</Text></Text>
-            <Text style={styles.listItem}>• Duress PIN: <Text style={styles.bold}>4321</Text></Text>
-            <Text style={styles.note}>Note: These are demo values for V1 testing.</Text>
+        <SectionHeader title="Account" />
+        <View style={styles.card}>
+          <View style={styles.accountRow}>
+            <View style={styles.avatarCircle}>
+              <Text style={styles.avatarText}>{userEmail ? userEmail.charAt(0).toUpperCase() : 'U'}</Text>
+            </View>
+            <View>
+              <Text style={styles.userEmail}>{userEmail || 'Local Guest'}</Text>
+              <Text style={styles.userStatus}>Status: {userEmail ? 'Verified Account' : 'Demo Mode'}</Text>
+            </View>
+          </View>
+          <PrimaryButton title="Log Out" variant="danger" onPress={handleLogout} style={{marginTop: 16}} />
+        </View>
+
+        <SectionHeader title="Security & PINs" />
+        <View style={styles.card}>
+          <Text style={styles.listItem}>• Cancel PIN: <Text style={styles.bold}>1234</Text></Text>
+          <Text style={styles.listItem}>• Duress PIN: <Text style={styles.bold}>4321</Text></Text>
+          <Text style={styles.listItem}>Duress PIN can make the phone look safe while keeping help active behind the scenes.</Text>
+          <View style={styles.noteBox}>
+             <Text style={styles.noteText}>These are demo values for V1 testing.</Text>
           </View>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>2. Privacy Note</Text>
-          <View style={styles.card}>
-            <Text style={styles.listItem}>• SafeHer V1 does not use always-on microphone.</Text>
-            <Text style={styles.listItem}>• SafeHer V1 does not use camera or evidence capture.</Text>
-            <Text style={styles.listItem}>• Safe Window and Check-in work while the app is open in Expo Go.</Text>
-          </View>
+        <SectionHeader title="Privacy Info" />
+        <View style={styles.card}>
+          <Text style={styles.listItem}>SafeHer does not use always-on microphone or camera in this version.</Text>
+          <Text style={styles.listItem}>Location is only shared during SOS, Journey Mode, and active alerts to protect your privacy.</Text>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>3. Current V1 Features</Text>
-          <View style={styles.card}>
-            <Text style={styles.listItem}>✓ Home Safety Dashboard</Text>
-            <Text style={styles.listItem}>✓ Emergency Contacts</Text>
-            <Text style={styles.listItem}>✓ Settings</Text>
-            <Text style={styles.listItem}>✓ Safe Window timer</Text>
-            <Text style={styles.listItem}>✓ Dead Man Check-in timer</Text>
-            <Text style={styles.listItem}>✓ Missed check-in detection</Text>
-            <Text style={styles.listItem}>✓ Expo Go testing mode</Text>
-          </View>
+        <SectionHeader title="Sync & Storage" />
+        <View style={styles.card}>
+          <Text style={styles.listItem}>If network is unavailable, SafeHer keeps the alert locally and retries sync automatically.</Text>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>4. Coming Next</Text>
-          <View style={styles.card}>
-            <Text style={styles.listItemMuted}>• Missed check-in → Silent SOS integration after AlertContext merge</Text>
-            <Text style={styles.listItemMuted}>• Location sharing</Text>
-            <Text style={styles.listItemMuted}>• Google Maps link</Text>
-            <Text style={styles.listItemMuted}>• Backend integration</Text>
-            <Text style={styles.listItemMuted}>• Guardian dashboard</Text>
-            <Text style={styles.listItemMuted}>• SMS/email notification service</Text>
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account</Text>
-          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-            <Text style={styles.logoutButtonText}>Log Out</Text>
-          </TouchableOpacity>
+        <SectionHeader title="Safety Preferences" />
+        <View style={styles.card}>
+          <Text style={styles.toggleTitle}>Silent Alerts</Text>
+          <Text style={styles.toggleDesc}>Silent alerts are designed for situations where a visible alarm may be unsafe. Guardians are notified quietly.</Text>
+          <View style={styles.divider} />
+          <Text style={styles.toggleTitle}>Shake Trigger (Coming Soon)</Text>
+          <Text style={styles.toggleDesc}>Future option: Shake device to trigger SOS (Requires sensor update).</Text>
+          <View style={styles.divider} />
+          <Text style={styles.toggleTitle}>Voice Guard (Coming Soon)</Text>
+          <Text style={styles.toggleDesc}>Future option: Voice Guard is off by default and future-ready.</Text>
         </View>
 
       </ScrollView>
@@ -84,31 +97,26 @@ export const SettingsScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#FFF7F7' },
-  container: { flexGrow: 1, padding: 24 },
-  title: { fontSize: 28, fontWeight: 'bold', color: '#111827', marginBottom: 24 },
-  section: { marginBottom: 24 },
-  sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#111827', marginBottom: 12 },
+  safeArea: { flex: 1, backgroundColor: '#FAFAF9' },
+  container: { flexGrow: 1, padding: 24, paddingTop: Platform.OS === 'ios' ? 20 : 60 },
+  header: { marginBottom: 16 },
+  title: { fontSize: 32, fontWeight: '900', color: '#1E293B', marginBottom: 4, letterSpacing: -0.5 },
+  subtitle: { fontSize: 16, color: '#64748B', fontWeight: '500' },
   card: {
-    backgroundColor: '#FFFFFF',
-    padding: 16,
-    borderRadius: 12,
-    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 1
+    backgroundColor: '#FFFFFF', padding: 24, borderRadius: 20, marginBottom: 24,
+    shadowColor: '#1E293B', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 10, elevation: 2,
+    borderWidth: 1, borderColor: '#F1F5F9'
   },
-  listItem: { fontSize: 15, color: '#111827', marginBottom: 8 },
-  listItemMuted: { fontSize: 15, color: '#6B7280', marginBottom: 8 },
-  bold: { fontWeight: 'bold' },
-  note: { fontSize: 14, color: '#6B7280', fontStyle: 'italic', marginTop: 8 },
-  logoutButton: {
-    backgroundColor: '#EF4444',
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  logoutButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  }
+  accountRow: { flexDirection: 'row', alignItems: 'center' },
+  avatarCircle: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#EEF2FF', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  avatarText: { fontSize: 24, fontWeight: '800', color: '#4F46E5' },
+  userEmail: { fontSize: 16, fontWeight: '700', color: '#1E293B', marginBottom: 4 },
+  userStatus: { fontSize: 13, color: '#16A34A', fontWeight: '600' },
+  listItem: { fontSize: 15, color: '#475569', marginBottom: 12, lineHeight: 22 },
+  bold: { fontWeight: '700', color: '#1E293B' },
+  noteBox: { backgroundColor: '#F8FAFC', padding: 12, borderRadius: 8, marginTop: 8 },
+  noteText: { fontSize: 13, color: '#64748B', fontStyle: 'italic', textAlign: 'center' },
+  toggleTitle: { fontSize: 15, fontWeight: '700', color: '#1E293B', marginBottom: 4 },
+  toggleDesc: { fontSize: 13, color: '#64748B', lineHeight: 18 },
+  divider: { height: 1, backgroundColor: '#E2E8F0', marginVertical: 16 }
 });

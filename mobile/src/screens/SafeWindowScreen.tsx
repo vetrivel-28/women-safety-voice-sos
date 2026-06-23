@@ -1,13 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform, TextInput, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useSafeWindow } from '../context/SafeWindowContext';
 import { PrimaryButton } from '../components/PrimaryButton';
+import { SectionHeader } from '../components/SectionHeader';
+import { getCurrentLocationForAlert } from '../utils/location';
+import { searchPlaces, geocodePlace, PlaceResult } from '../services/geocodingService';
+import { formatDistance } from '../utils/geoUtils';
 
 export const SafeWindowScreen: React.FC = () => {
-  const { safeWindow, startSafeWindow, endSafeWindow, getRemainingSeconds, getCheckInRemainingSeconds } = useSafeWindow();
+  const { safeWindow, startSafeWindow, endSafeWindow, getRemainingSeconds, getCheckInRemainingSeconds, markCheckInSafe, distanceToDestination } = useSafeWindow();
   
   const [timeLeft, setTimeLeft] = useState(getRemainingSeconds());
   const [checkInTimeLeft, setCheckInTimeLeft] = useState(getCheckInRemainingSeconds());
+  
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<PlaceResult[]>([]);
+  const [selectedPlace, setSelectedPlace] = useState<PlaceResult | null>(null);
+  
+  const [isStarting, setIsStarting] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -28,80 +39,189 @@ export const SafeWindowScreen: React.FC = () => {
     };
   }, [safeWindow.status, safeWindow.endsAt, safeWindow.checkInDueAt, getRemainingSeconds, getCheckInRemainingSeconds]);
 
+  const handleSearch = async (text: string) => {
+    setSearchQuery(text);
+    if (text.length > 2) {
+      setIsSearching(true);
+      const results = await searchPlaces(text);
+      setSearchResults(results);
+      setIsSearching(false);
+    } else {
+      setSearchResults([]);
+    }
+  };
+
+  const handleSelectPlace = (place: PlaceResult) => {
+    setSelectedPlace(place);
+    setSearchQuery(place.name);
+    setSearchResults([]);
+  };
+
+  const clearSelection = () => {
+    setSelectedPlace(null);
+    setSearchQuery('');
+  };
+
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
+  const handleStart = async (minutes: 15|30|60|0.5) => {
+    setIsStarting(true);
+    let startLoc, destLoc;
+    const locData = await getCurrentLocationForAlert();
+    if (locData && !locData.permissionDenied) {
+      startLoc = { latitude: locData.latitude, longitude: locData.longitude };
+    }
+    if (selectedPlace) {
+      const coords = await geocodePlace(selectedPlace.id);
+      if (coords) {
+         destLoc = coords;
+      } else {
+         destLoc = { latitude: selectedPlace.latitude, longitude: selectedPlace.longitude };
+      }
+    }
+    startSafeWindow(minutes, startLoc, destLoc);
+    setIsStarting(false);
+  };
+
+  const calculateRiskScore = () => {
+    if (safeWindow.status === 'MISSED_CHECKIN') return 'HIGH';
+    if (safeWindow.routeDeviationDetected) return 'HIGH';
+    return 'LOW';
+  };
+
+  const riskScore = calculateRiskScore();
+
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Safe Window</Text>
-        <Text style={styles.subtitle}>Start a temporary safety monitoring period.</Text>
-
-        <View style={styles.statusCard}>
-          <Text style={styles.statusHeader}>Current Status</Text>
-          <View style={styles.statusRow}>
-            <Text style={styles.label}>Status:</Text>
-            <Text style={[
-              styles.value, 
-              safeWindow.status === 'ACTIVE' && styles.activeValue, 
-              safeWindow.status === 'MISSED_CHECKIN' && styles.errorValue
-            ]}>
-              {safeWindow.status === 'ACTIVE' ? 'Active' : 
-               safeWindow.status === 'INACTIVE' ? 'Inactive' : 
-               safeWindow.status === 'COMPLETED' ? 'Completed' : 'Missed Check-in'}
-            </Text>
-          </View>
-          {safeWindow.startedAt && (
-            <View style={styles.statusRow}>
-              <Text style={styles.label}>Started at:</Text>
-              <Text style={styles.value}>{new Date(safeWindow.startedAt).toLocaleTimeString()}</Text>
-            </View>
-          )}
-          {safeWindow.endsAt && (
-            <View style={styles.statusRow}>
-              <Text style={styles.label}>Ends at:</Text>
-              <Text style={styles.value}>{new Date(safeWindow.endsAt).toLocaleTimeString()}</Text>
-            </View>
-          )}
-          {safeWindow.demoMode && (
-            <View style={styles.demoBadge}>
-              <Text style={styles.demoBadgeText}>Demo Mode Active</Text>
-            </View>
-          )}
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Journey Mode</Text>
+          <Text style={styles.subtitle}>Route monitoring with automatic guardian updates if you deviate or fail to check in.</Text>
         </View>
 
-        {safeWindow.status === 'ACTIVE' ? (
-          <View style={styles.activeSection}>
-            <Text style={styles.countdownTitle}>Window Time Remaining:</Text>
-            <Text style={styles.countdown}>{formatTime(timeLeft)}</Text>
-            
-            <Text style={styles.countdownTitle}>Check-in due in:</Text>
-            <Text style={styles.checkInCountdown}>{formatTime(checkInTimeLeft)}</Text>
-            
-            <Text style={styles.note}>
-              Dead Man Check-in will ask for confirmation during this window.
-            </Text>
-            <PrimaryButton title="End Safe Window" variant="normal" onPress={endSafeWindow} />
-          </View>
-        ) : safeWindow.status === 'MISSED_CHECKIN' ? (
-          <View style={styles.activeSection}>
-            <View style={styles.errorCard}>
-              <Text style={styles.errorTitle}>Missed check-in detected.</Text>
-              <Text style={styles.errorText}>Silent SOS integration pending until Person A’s AlertContext is merged.</Text>
+        {safeWindow.status === 'ACTIVE' || safeWindow.status === 'MISSED_CHECKIN' ? (
+          <>
+            <View style={styles.statusCard}>
+              <View style={styles.statusRow}>
+                <Text style={styles.label}>Journey Status</Text>
+                <View style={[styles.statusBadge, 
+                    safeWindow.status === 'ACTIVE' ? styles.badgeActive : 
+                    styles.badgeError]}>
+                  <Text style={[styles.statusText, 
+                      safeWindow.status === 'ACTIVE' ? styles.textActive : 
+                      styles.textError]}>
+                    {safeWindow.status === 'ACTIVE' ? 'Active Tracking' : 'Missed Check-in'}
+                  </Text>
+                </View>
+              </View>
             </View>
-            <PrimaryButton title="End Safe Window" variant="normal" onPress={endSafeWindow} />
-          </View>
+
+            {safeWindow.status === 'ACTIVE' ? (
+              <View style={styles.activeSection}>
+                <View style={styles.timerCircle}>
+                  <Text style={styles.countdownTitle}>Window Time</Text>
+                  <Text style={styles.countdown}>{formatTime(timeLeft)}</Text>
+                </View>
+                
+                <View style={styles.nextCheckInBox}>
+                  <Text style={styles.checkInLabel}>Check-in Required In</Text>
+                  <Text style={styles.checkInCountdown}>{formatTime(checkInTimeLeft)}</Text>
+                </View>
+                
+                <PrimaryButton title="I'm Safe (Check-in)" variant="primary" onPress={markCheckInSafe} style={{width: '100%', marginBottom: 16}} />
+
+                <View style={styles.riskCard}>
+                   <View style={styles.riskHeader}>
+                     <Text style={styles.riskTitle}>Status</Text>
+                     <View style={[styles.riskBadge, riskScore === 'LOW' ? styles.riskBadgeLow : styles.riskBadgeHigh]}>
+                       <Text style={[styles.riskValue, riskScore === 'LOW' ? styles.riskLow : styles.riskHigh]}>
+                         {riskScore === 'LOW' ? 'Normal' : 'High Risk'}
+                       </Text>
+                     </View>
+                   </View>
+                </View>
+
+                {safeWindow.destinationLocation && (
+                  <View style={styles.routeCard}>
+                     <View style={styles.routeHeader}>
+                        <Text style={styles.routeIcon}>📍</Text>
+                        <Text style={styles.routeTitle}>Route Tracking Active</Text>
+                     </View>
+                     <Text style={styles.routeText}>Distance to destination: <Text style={{fontWeight: 'bold'}}>{formatDistance(distanceToDestination)}</Text></Text>
+                     {safeWindow.routeDeviationDetected && (
+                       <View style={styles.deviationBox}>
+                         <Text style={styles.deviationText}>Deviation Detected! Immediate check-in required.</Text>
+                       </View>
+                     )}
+                  </View>
+                )}
+
+                <PrimaryButton title="End Journey" variant="outline" onPress={endSafeWindow} style={styles.endBtn} />
+              </View>
+            ) : (
+              <View style={styles.activeSection}>
+                <View style={styles.errorCard}>
+                   <Text style={styles.errorIcon}>⚠️</Text>
+                   <Text style={styles.errorTitle}>Emergency Alert Sent</Text>
+                   <Text style={styles.errorText}>You missed your check-in or deviated from your route. Your guardians have been notified.</Text>
+                </View>
+
+                <PrimaryButton title="Cancel Alarm & End Journey" variant="outline" onPress={endSafeWindow} style={styles.endBtn} />
+              </View>
+            )}
+          </>
         ) : (
           <View style={styles.optionsSection}>
-            <Text style={styles.sectionTitle}>Select Duration</Text>
-            <PrimaryButton title="15 minutes" onPress={() => startSafeWindow(15)} variant="dark" />
-            <PrimaryButton title="30 minutes" onPress={() => startSafeWindow(30)} variant="dark" />
-            <PrimaryButton title="60 minutes" onPress={() => startSafeWindow(60)} variant="dark" />
-            <View style={{ height: 16 }} />
-            <PrimaryButton title="Demo 30 seconds" onPress={() => startSafeWindow(0.5)} variant="warning" />
+            <View style={styles.card}>
+              <SectionHeader title="Where are you going?" subtitle="Optional. Enables route deviation detection." />
+              
+              {!selectedPlace ? (
+                <View>
+                  <TextInput 
+                    style={styles.searchInput} 
+                    placeholder="Search destination..." 
+                    placeholderTextColor="#94A3B8" 
+                    value={searchQuery} 
+                    onChangeText={handleSearch} 
+                  />
+                  {isSearching && <ActivityIndicator style={{marginTop: 8}} color="#4F46E5" />}
+                  {searchResults.length > 0 && (
+                    <View style={styles.resultsContainer}>
+                      {searchResults.map(result => (
+                        <TouchableOpacity key={result.id} style={styles.resultItem} onPress={() => handleSelectPlace(result)}>
+                          <Text style={styles.resultName}>{result.name}</Text>
+                          <Text style={styles.resultDesc}>{result.description}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              ) : (
+                <View style={styles.selectedPlaceCard}>
+                  <View>
+                    <Text style={styles.selectedPlaceName}>{selectedPlace.name}</Text>
+                    <Text style={styles.selectedPlaceDesc}>{selectedPlace.description}</Text>
+                  </View>
+                  <TouchableOpacity onPress={clearSelection}>
+                    <Text style={styles.clearText}>Clear</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.card}>
+              <SectionHeader title="Start Journey" subtitle="Select monitoring duration" />
+              <View style={styles.buttonGrid}>
+                <PrimaryButton style={styles.gridButton} title="15 min" disabled={isStarting} onPress={() => handleStart(15)} variant="dark" />
+                <PrimaryButton style={styles.gridButton} title="30 min" disabled={isStarting} onPress={() => handleStart(30)} variant="dark" />
+                <PrimaryButton style={styles.gridButton} title="60 min" disabled={isStarting} onPress={() => handleStart(60)} variant="dark" />
+                <PrimaryButton style={styles.gridButton} title="Demo (30s)" disabled={isStarting} onPress={() => handleStart(0.5)} variant="outline" />
+              </View>
+            </View>
           </View>
         )}
       </ScrollView>
@@ -110,33 +230,75 @@ export const SafeWindowScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#FFF7F7' },
-  container: { flexGrow: 1, padding: 24 },
-  title: { fontSize: 28, fontWeight: 'bold', color: '#111827', marginBottom: 4 },
-  subtitle: { fontSize: 16, color: '#6B7280', marginBottom: 24 },
-  statusCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 24,
-    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 1
+  safeArea: { flex: 1, backgroundColor: '#FAFAF9' },
+  container: { flexGrow: 1, padding: 24, paddingTop: Platform.OS === 'ios' ? 20 : 60 },
+  header: { marginBottom: 24 },
+  title: { fontSize: 32, fontWeight: '900', color: '#1E293B', marginBottom: 8, letterSpacing: -0.5 },
+  subtitle: { fontSize: 16, color: '#64748B', fontWeight: '500', lineHeight: 22 },
+  card: {
+    backgroundColor: '#FFFFFF', padding: 20, borderRadius: 16, marginBottom: 16,
+    shadowColor: '#1E293B', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 10, elevation: 2,
+    borderWidth: 1, borderColor: '#F1F5F9'
   },
-  statusHeader: { fontSize: 18, fontWeight: 'bold', color: '#111827', marginBottom: 12 },
-  statusRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  label: { fontSize: 15, color: '#4B5563' },
-  value: { fontSize: 15, color: '#111827', fontWeight: '500' },
-  activeValue: { color: '#16A34A', fontWeight: 'bold' },
-  errorValue: { color: '#DC2626', fontWeight: 'bold' },
-  demoBadge: { backgroundColor: '#FEF3C7', padding: 8, borderRadius: 8, marginTop: 12, alignItems: 'center' },
-  demoBadgeText: { color: '#F59E0B', fontWeight: 'bold', fontSize: 14 },
+  statusCard: {
+    backgroundColor: '#FFFFFF', padding: 16, borderRadius: 16, marginBottom: 16,
+    shadowColor: '#1E293B', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 10, elevation: 2,
+    borderWidth: 1, borderColor: '#F1F5F9'
+  },
+  statusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  label: { fontSize: 16, fontWeight: '700', color: '#1E293B' },
+  statusBadge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
+  badgeActive: { backgroundColor: '#EEF2FF' },
+  badgeError: { backgroundColor: '#FEE2E2' },
+  statusText: { fontSize: 13, fontWeight: '800', textTransform: 'uppercase' },
+  textActive: { color: '#4F46E5' },
+  textError: { color: '#DC2626' },
   activeSection: { alignItems: 'center', marginTop: 8 },
-  countdownTitle: { fontSize: 16, color: '#4B5563', marginBottom: 4 },
-  countdown: { fontSize: 48, fontWeight: 'bold', color: '#111827', marginBottom: 16 },
-  checkInCountdown: { fontSize: 32, fontWeight: 'bold', color: '#F59E0B', marginBottom: 24 },
-  note: { fontSize: 14, color: '#4B5563', textAlign: 'center', marginBottom: 24, fontStyle: 'italic' },
+  timerCircle: {
+    width: 180, height: 180, borderRadius: 90, backgroundColor: '#FFFFFF',
+    borderWidth: 6, borderColor: '#EEF2FF',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 20,
+    shadowColor: '#4F46E5', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.1, shadowRadius: 16, elevation: 4
+  },
+  countdownTitle: { fontSize: 13, color: '#64748B', fontWeight: '600', textTransform: 'uppercase', marginBottom: 4 },
+  countdown: { fontSize: 44, fontWeight: '900', color: '#1E293B' },
+  nextCheckInBox: {
+    backgroundColor: '#FFFBEB', padding: 16, borderRadius: 12, width: '100%', alignItems: 'center', marginBottom: 20,
+    borderWidth: 1, borderColor: '#FEF3C7'
+  },
+  checkInLabel: { fontSize: 14, color: '#B45309', fontWeight: '700', marginBottom: 4 },
+  checkInCountdown: { fontSize: 32, fontWeight: '800', color: '#D97706' },
   optionsSection: { marginTop: 8 },
-  sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#111827', marginBottom: 16 },
-  errorCard: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5', borderWidth: 1, padding: 16, borderRadius: 8, width: '100%', marginBottom: 24 },
-  errorTitle: { fontSize: 18, fontWeight: 'bold', color: '#DC2626', marginBottom: 8, textAlign: 'center' },
-  errorText: { fontSize: 14, color: '#991B1B', textAlign: 'center' },
+  buttonGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
+  gridButton: { width: '48%', marginBottom: 12 },
+  errorCard: { backgroundColor: '#FEF2F2', borderColor: '#FECACA', borderWidth: 1, padding: 24, borderRadius: 16, width: '100%', marginBottom: 24, alignItems: 'center' },
+  errorIcon: { fontSize: 48, marginBottom: 12 },
+  errorTitle: { fontSize: 20, fontWeight: '800', color: '#DC2626', marginBottom: 8, textAlign: 'center' },
+  errorText: { fontSize: 15, color: '#991B1B', textAlign: 'center', lineHeight: 22 },
+  riskCard: { backgroundColor: '#FFFFFF', padding: 16, borderRadius: 12, width: '100%', marginBottom: 12, borderWidth: 1, borderColor: '#F1F5F9' },
+  riskHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  riskTitle: { fontSize: 14, fontWeight: '600', color: '#334155' },
+  riskBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  riskBadgeLow: { backgroundColor: '#F0FDF4' },
+  riskBadgeHigh: { backgroundColor: '#FEF2F2' },
+  riskValue: { fontSize: 13, fontWeight: '700' },
+  riskLow: { color: '#166534' },
+  riskHigh: { color: '#991B1B' },
+  routeCard: { backgroundColor: '#F8FAFC', padding: 16, borderRadius: 12, width: '100%', marginBottom: 20, borderWidth: 1, borderColor: '#E2E8F0' },
+  routeHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  routeIcon: { fontSize: 18, marginRight: 8 },
+  routeTitle: { fontSize: 15, fontWeight: '700', color: '#1E293B' },
+  routeText: { fontSize: 14, color: '#475569' },
+  deviationBox: { marginTop: 12, backgroundColor: '#FEF2F2', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#FECACA' },
+  deviationText: { color: '#DC2626', fontWeight: '700', fontSize: 13 },
+  endBtn: { width: '100%' },
+  searchInput: { backgroundColor: '#F8FAFC', padding: 14, borderRadius: 10, color: '#1E293B', borderWidth: 1, borderColor: '#E2E8F0', fontSize: 15 },
+  resultsContainer: { marginTop: 8, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', overflow: 'hidden' },
+  resultItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  resultName: { fontSize: 15, fontWeight: '600', color: '#1E293B' },
+  resultDesc: { fontSize: 13, color: '#64748B', marginTop: 2 },
+  selectedPlaceCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#EEF2FF', padding: 14, borderRadius: 10, borderWidth: 1, borderColor: '#C7D2FE' },
+  selectedPlaceName: { fontSize: 15, fontWeight: '700', color: '#3730A3' },
+  selectedPlaceDesc: { fontSize: 13, color: '#4F46E5', marginTop: 2 },
+  clearText: { color: '#4F46E5', fontWeight: '700', fontSize: 14, padding: 8 }
 });

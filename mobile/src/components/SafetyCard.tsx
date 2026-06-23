@@ -1,79 +1,91 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { TouchableOpacity, Text, StyleSheet, View } from 'react-native';
 
 interface SafetyCardProps {
   title: string;
   subtitle: string;
   status?: string;
-  statusColor?: string;
-  onPress?: () => void;
+  onPress: () => void;
 }
 
-export const SafetyCard: React.FC<SafetyCardProps> = ({ 
-  title, 
-  subtitle, 
-  status, 
-  statusColor,
-  onPress 
-}) => {
-  const CardContainer = onPress ? TouchableOpacity : View;
-
+export const SafetyCard: React.FC<SafetyCardProps> = ({ title, subtitle, status, onPress }) => {
   return (
-    <CardContainer style={styles.card} onPress={onPress}>
-      <View style={styles.cardHeader}>
-        <Text style={styles.cardTitle}>{title}</Text>
+    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.8}>
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>{title}</Text>
         {status && (
-          <View style={[styles.statusBadge, statusColor ? { backgroundColor: `${statusColor}20` } : {}]}>
-            <Text style={[styles.statusText, statusColor ? { color: statusColor } : {}]}>{status}</Text>
+          <View style={styles.statusPill}>
+            <Text style={styles.statusText}>{status}</Text>
           </View>
         )}
       </View>
-      <Text style={styles.cardSubtitle}>{subtitle}</Text>
-    </CardContainer>
+      <Text style={styles.subtitle}>{subtitle}</Text>
+      <View style={styles.footer}>
+        <Text style={styles.actionText}>Manage Settings</Text>
+        <Text style={styles.arrow}>→</Text>
+      </View>
+    </TouchableOpacity>
   );
 };
 
 const styles = StyleSheet.create({
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
-    marginVertical: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-    width: '100%',
-    borderColor: '#E5E7EB',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 16,
+    shadowColor: '#1E293B',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
     borderWidth: 1,
+    borderColor: '#F8FAFC',
   },
-  cardHeader: {
+  headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
   },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#111827',
+  title: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#1E293B',
   },
-  cardSubtitle: {
-    fontSize: 14,
-    color: '#6B7280',
-    lineHeight: 20,
-  },
-  statusBadge: {
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 8,
+  statusPill: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
-    overflow: 'hidden',
   },
   statusText: {
     fontSize: 12,
-    fontWeight: '500',
-    color: '#F59E0B',
+    color: '#475569',
+    fontWeight: '700',
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#64748B',
+    marginBottom: 16,
+    lineHeight: 20,
+  },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    paddingTop: 12,
+  },
+  actionText: {
+    fontSize: 14,
+    color: '#4F46E5',
+    fontWeight: '700',
+    flex: 1,
+  },
+  arrow: {
+    fontSize: 18,
+    color: '#4F46E5',
+    fontWeight: '700',
   },
 });
