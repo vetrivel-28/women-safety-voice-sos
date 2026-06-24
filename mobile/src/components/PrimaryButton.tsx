@@ -45,7 +45,7 @@ export const PrimaryButton: React.FC<PrimaryButtonProps> = ({
         disabled && styles.disabled, 
         style,
         { transform: [{ scale: scaleAnim }] }
-      ]} 
+      ] as any} 
       onPress={onPress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}

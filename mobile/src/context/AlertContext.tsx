@@ -1,6 +1,8 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useRef } from 'react';
 import { SOSAlert, TriggerType, AlertStatus } from '../types';
 import { supabase } from '../lib/supabaseClient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
 
 interface AlertContextType {
   alerts: SOSAlert[];
@@ -10,6 +12,9 @@ interface AlertContextType {
     visibleMessage: string;
     cancelMethod?: 'REAL_PIN' | 'DURESS_PIN' | 'NONE';
     location?: SOSAlert['location'];
+    guardian_name?: string;
+    guardian_phone?: string;
+    guardian_email?: string;
   }) => string;
   updateAlert: (alertId: string, updates: Partial<SOSAlert>) => void;
   resolveAlert: (alertId: string) => Promise<void>;
@@ -23,14 +28,19 @@ const AlertContext = createContext<AlertContextType | undefined>(undefined);
 export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [alerts, setAlerts] = useState<SOSAlert[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const retryInProgress = useRef(false);
+  const alertsRef = useRef<SOSAlert[]>([]);
 
   useEffect(() => {
-    // Get initial session
+    alertsRef.current = alerts;
+  }, [alerts]);
+
+  useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setCurrentUserId(session?.user?.id || 'local_guest');
     });
 
-    // Listen to auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setCurrentUserId(session?.user?.id || 'local_guest');
     });
@@ -40,7 +50,31 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
-  // Sync function that can be called for new or pending alerts
+  useEffect(() => {
+    const loadAlerts = async () => {
+      try {
+        const stored = await AsyncStorage.getItem('@safeher_alerts');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setAlerts(parsed);
+        }
+      } catch (e) {
+        console.warn('Failed to load alerts from storage', e);
+      } finally {
+        setIsLoaded(true);
+      }
+    };
+    loadAlerts();
+  }, []);
+
+  useEffect(() => {
+    if (isLoaded) {
+      AsyncStorage.setItem('@safeher_alerts', JSON.stringify(alerts)).catch(e => {
+        console.warn('Failed to save alerts to storage', e);
+      });
+    }
+  }, [alerts, isLoaded]);
+
   const syncToBackend = async (alert: SOSAlert, userId: string, guardian?: { name?: string, phone?: string, email?: string }) => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -53,7 +87,7 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-      const apiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+      const apiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://10.0.2.2:8000';
 
       const response = await fetch(`${apiUrl}/api/sos/create`, {
         method: 'POST',
@@ -150,7 +184,7 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
 
-      const apiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+      const apiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://10.0.2.2:8000';
       const response = await fetch(`${apiUrl}/api/sos/${alert.backendId}`, {
         method: 'PATCH',
         headers: {
@@ -164,13 +198,11 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
 
       if (!response.ok) {
-        console.warn('Failed to update alert status on backend');
-        updateAlert(alertId, { syncStatus: 'PENDING_SYNC', lastSyncError: 'Backend status update pending (endpoint missing)' });
+        updateAlert(alertId, { syncStatus: 'PENDING_SYNC', lastSyncError: 'Backend status update pending' });
       } else {
         updateAlert(alertId, { syncStatus: 'SYNCED', lastSyncError: undefined });
       }
     } catch (err) {
-      console.warn('Network error updating alert status', err);
       updateAlert(alertId, { syncStatus: 'PENDING_SYNC', lastSyncError: 'Network error updating status' });
     }
   };
@@ -195,15 +227,39 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const retryPendingAlerts = async () => {
-    const pendingAlerts = alerts.filter(
+    if (retryInProgress.current || !isLoaded) return;
+    retryInProgress.current = true;
+    
+    const pendingAlerts = alertsRef.current.filter(
       a => a.ownerUserId === currentUserId && (a.syncStatus === 'PENDING_SYNC' || a.syncStatus === 'FAILED_SYNC')
     );
     
     for (const alert of pendingAlerts) {
-      updateAlert(alert.id, { syncStatus: 'PENDING_SYNC' });
-      await syncToBackend(alert, alert.ownerUserId || 'local_guest');
+      if (!alert.backendId) {
+        updateAlert(alert.id, { syncStatus: 'PENDING_SYNC' });
+        await syncToBackend(alert, alert.ownerUserId || 'local_guest');
+      } else {
+        await syncAlertStatusToBackend(alert.id, alert.status, alert.cancelMethod || 'NONE');
+      }
     }
+    
+    retryInProgress.current = false;
   };
+
+  useEffect(() => {
+    if (isLoaded && currentUserId) {
+      retryPendingAlerts();
+    }
+  }, [isLoaded, currentUserId]);
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      if (state.isConnected && isLoaded && currentUserId) {
+        retryPendingAlerts();
+      }
+    });
+    return () => unsubscribe();
+  }, [isLoaded, currentUserId]);
 
   const visibleAlerts = alerts.filter(a => a.ownerUserId === currentUserId);
 

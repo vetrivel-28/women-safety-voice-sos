@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform, TouchableOpacity } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types';
@@ -18,12 +18,13 @@ type HomeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'H
 export default function HomeScreen() {
   const navigation = useNavigation<HomeScreenNavigationProp>();
   const { contacts } = useContacts();
-  const { safeWindow } = useSafeWindow();
+  const { safeWindow, checkAndPromptBatteryExemption } = useSafeWindow();
   const { createAlert } = useAlert();
   const [session, setSession] = useState<any>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
+    checkAndPromptBatteryExemption();
   }, []);
 
   const handleManualSOS = () => {
@@ -41,6 +42,8 @@ export default function HomeScreen() {
 
   const isSynced = !!session;
 
+  const userEmail = session?.user?.email || '';
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
@@ -51,7 +54,14 @@ export default function HomeScreen() {
             <Text style={styles.subtitle}>Emergency help, quietly when needed.</Text>
           </View>
           <View style={styles.pillsContainer}>
-             {/* Technical sync pill removed from home screen per PRD */}
+            <TouchableOpacity 
+              style={styles.profileAvatar} 
+              onPress={() => navigation.navigate('Settings')}
+            >
+              <Text style={styles.profileAvatarText}>
+                {userEmail ? userEmail.charAt(0).toUpperCase() : 'U'}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -141,6 +151,21 @@ const styles = StyleSheet.create({
   pillsContainer: {
     alignItems: 'flex-end',
     gap: 8,
+  },
+  profileAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#EEF2FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#C7D2FE',
+  },
+  profileAvatarText: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#4F46E5',
   },
   sosContainer: { 
     alignItems: 'center',

@@ -1,19 +1,137 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform, Alert } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform, Alert, TextInput, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { supabase } from '../lib/supabaseClient';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SectionHeader } from '../components/SectionHeader';
 
+
+const rawApiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || process.env.EXPO_PUBLIC_API_URL || 'http://10.0.2.2:8000';
+const API_BASE_URL = rawApiUrl.trim().replace(/\/$/, '');
+console.log('API_BASE_URL =', API_BASE_URL);
 export const SettingsScreen: React.FC = () => {
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [session, setSession] = useState<any>(null);
+
+  // Profile Form State
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [bloodGroup, setBloodGroup] = useState('');
+  const [medicalNotes, setMedicalNotes] = useState('');
+  const [isLoadingProfile, setIsLoadingProfile] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+
+  // --- DIAGNOSTICS ---
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+  const addLog = (msg: string) => {
+    const time = new Date().toLocaleTimeString();
+    setDebugLogs(prev => [...prev, `[${time}] ${msg}`]);
+  };
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
       if (session?.user?.email) {
         setUserEmail(session.user.email);
+        fetchProfile();
       }
     });
   }, []);
+
+  const fetchProfile = async () => {
+    setIsLoadingProfile(true);
+    addLog('--- FETCH PROFILE START ---');
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const currentSession = data.session;
+      if (!currentSession?.access_token) {
+        addLog('-> FAILED: No active session found');
+        setIsLoadingProfile(false);
+        return;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        addLog('-> TIMEOUT ABORTED (10s)');
+        controller.abort();
+      }, 10000);
+
+      const response = await fetch(`${API_BASE_URL}/api/profile`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${currentSession.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      addLog(`-> GET STATUS: ${response.status}`);
+
+      const text = await response.text();
+      addLog(`-> GET RESPONSE LENGTH: ${text.length}`);
+
+      if (response.ok) {
+        const parsed = JSON.parse(text);
+        setName(parsed.name || '');
+        setPhone(parsed.phone || '');
+        setBloodGroup(parsed.blood_group || '');
+        setMedicalNotes(parsed.medical_notes || '');
+      }
+    } catch (e: any) {
+      addLog(`-> GET FAILED: ${e.name} - ${e.message}`);
+    } finally {
+      setIsLoadingProfile(false);
+    }
+  };
+
+  const saveProfile = async () => {
+    setIsSavingProfile(true);
+    addLog('--- SAVE PROFILE START ---');
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const currentSession = data.session;
+      if (!currentSession?.access_token) {
+        addLog('-> FAILED: No active session found');
+        Alert.alert('Error', 'No active session found.');
+        setIsSavingProfile(false);
+        return;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        addLog('-> POST TIMEOUT ABORTED (15s)');
+        controller.abort();
+      }, 15000);
+      console.log('REQUEST URL =', `${API_BASE_URL}/api/profile`);
+      const response = await fetch(`${API_BASE_URL}/api/profile`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${currentSession.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name, phone, blood_group: bloodGroup, medical_notes: medicalNotes }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      addLog(`-> POST STATUS: ${response.status}`);
+
+      const responseText = await response.text();
+
+      if (response.ok) {
+        Alert.alert('Success', 'Profile updated successfully.');
+      } else {
+        Alert.alert('Backend Error', responseText || `HTTP ${response.status}`);
+      }
+    } catch (e: any) {
+      addLog(`-> POST FAILED: ${e.name} - ${e.message}`);
+      Alert.alert('Save Failed', e.name === 'AbortError' ? 'Request timed out' : e.message || 'Network error');
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
 
   const handleLogout = () => {
     Alert.alert(
@@ -21,8 +139,8 @@ export const SettingsScreen: React.FC = () => {
       'Are you sure you want to log out?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Log Out', 
+        {
+          text: 'Log Out',
           style: 'destructive',
           onPress: async () => {
             const { error } = await supabase.auth.signOut();
@@ -38,7 +156,17 @@ export const SettingsScreen: React.FC = () => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-        
+
+        <View style={styles.card}>
+          <Text style={{ fontWeight: 'bold', marginBottom: 8 }}>Diagnostic Logs:</Text>
+          {debugLogs.map((log, i) => (
+            <Text key={i} style={{ fontSize: 10, fontFamily: 'monospace', color: '#333' }}>{log}</Text>
+          ))}
+          <TouchableOpacity onPress={() => setDebugLogs([])}>
+            <Text style={{ color: 'blue', marginTop: 10 }}>Clear Logs</Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.header}>
           <Text style={styles.title}>Settings</Text>
           <Text style={styles.subtitle}>App preferences and account.</Text>
@@ -55,8 +183,35 @@ export const SettingsScreen: React.FC = () => {
               <Text style={styles.userStatus}>Status: {userEmail ? 'Verified Account' : 'Demo Mode'}</Text>
             </View>
           </View>
-          <PrimaryButton title="Log Out" variant="danger" onPress={handleLogout} style={{marginTop: 16}} />
+          <PrimaryButton title="Log Out" variant="danger" onPress={handleLogout} style={{ marginTop: 16 }} />
         </View>
+
+        {session && (
+          <>
+            <SectionHeader title="Personal Profile" subtitle="Important details for emergency responders" />
+            <View style={styles.card}>
+              {isLoadingProfile ? (
+                <ActivityIndicator color="#4F46E5" />
+              ) : (
+                <>
+                  <Text style={styles.inputLabel}>Full Name</Text>
+                  <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Your full name" />
+
+                  <Text style={styles.inputLabel}>Phone Number</Text>
+                  <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Your phone number" keyboardType="phone-pad" />
+
+                  <Text style={styles.inputLabel}>Blood Group</Text>
+                  <TextInput style={styles.input} value={bloodGroup} onChangeText={setBloodGroup} placeholder="E.g. O+, A-, etc." />
+
+                  <Text style={styles.inputLabel}>Emergency / Medical Notes</Text>
+                  <TextInput style={[styles.input, { height: 80 }]} value={medicalNotes} onChangeText={setMedicalNotes} placeholder="Allergies, medications, etc." multiline />
+
+                  <PrimaryButton title={isSavingProfile ? "Saving..." : "Save Profile"} variant="primary" onPress={saveProfile} disabled={isSavingProfile} />
+                </>
+              )}
+            </View>
+          </>
+        )}
 
         <SectionHeader title="Security & PINs" />
         <View style={styles.card}>
@@ -64,7 +219,7 @@ export const SettingsScreen: React.FC = () => {
           <Text style={styles.listItem}>• Duress PIN: <Text style={styles.bold}>4321</Text></Text>
           <Text style={styles.listItem}>Duress PIN can make the phone look safe while keeping help active behind the scenes.</Text>
           <View style={styles.noteBox}>
-             <Text style={styles.noteText}>These are demo values for V1 testing.</Text>
+            <Text style={styles.noteText}>These are demo values for V1 testing.</Text>
           </View>
         </View>
 
@@ -72,23 +227,6 @@ export const SettingsScreen: React.FC = () => {
         <View style={styles.card}>
           <Text style={styles.listItem}>SafeHer does not use always-on microphone or camera in this version.</Text>
           <Text style={styles.listItem}>Location is only shared during SOS, Journey Mode, and active alerts to protect your privacy.</Text>
-        </View>
-
-        <SectionHeader title="Sync & Storage" />
-        <View style={styles.card}>
-          <Text style={styles.listItem}>If network is unavailable, SafeHer keeps the alert locally and retries sync automatically.</Text>
-        </View>
-
-        <SectionHeader title="Safety Preferences" />
-        <View style={styles.card}>
-          <Text style={styles.toggleTitle}>Silent Alerts</Text>
-          <Text style={styles.toggleDesc}>Silent alerts are designed for situations where a visible alarm may be unsafe. Guardians are notified quietly.</Text>
-          <View style={styles.divider} />
-          <Text style={styles.toggleTitle}>Shake Trigger (Coming Soon)</Text>
-          <Text style={styles.toggleDesc}>Future option: Shake device to trigger SOS (Requires sensor update).</Text>
-          <View style={styles.divider} />
-          <Text style={styles.toggleTitle}>Voice Guard (Coming Soon)</Text>
-          <Text style={styles.toggleDesc}>Future option: Voice Guard is off by default and future-ready.</Text>
         </View>
 
       </ScrollView>
@@ -116,7 +254,6 @@ const styles = StyleSheet.create({
   bold: { fontWeight: '700', color: '#1E293B' },
   noteBox: { backgroundColor: '#F8FAFC', padding: 12, borderRadius: 8, marginTop: 8 },
   noteText: { fontSize: 13, color: '#64748B', fontStyle: 'italic', textAlign: 'center' },
-  toggleTitle: { fontSize: 15, fontWeight: '700', color: '#1E293B', marginBottom: 4 },
-  toggleDesc: { fontSize: 13, color: '#64748B', lineHeight: 18 },
-  divider: { height: 1, backgroundColor: '#E2E8F0', marginVertical: 16 }
+  inputLabel: { fontSize: 14, fontWeight: '700', color: '#334155', marginBottom: 6 },
+  input: { backgroundColor: '#F8FAFC', padding: 14, borderRadius: 10, color: '#1E293B', borderWidth: 1, borderColor: '#E2E8F0', fontSize: 15, marginBottom: 16 }
 });

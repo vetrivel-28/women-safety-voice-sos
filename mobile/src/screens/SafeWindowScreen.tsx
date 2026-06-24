@@ -8,10 +8,11 @@ import { searchPlaces, geocodePlace, PlaceResult } from '../services/geocodingSe
 import { formatDistance } from '../utils/geoUtils';
 
 export const SafeWindowScreen: React.FC = () => {
-  const { safeWindow, startSafeWindow, endSafeWindow, getRemainingSeconds, getCheckInRemainingSeconds, markCheckInSafe, distanceToDestination } = useSafeWindow();
+  const { safeWindow, startSafeWindow, endSafeWindow, getRemainingSeconds, getCheckInRemainingSeconds, markCheckInSafe, distanceToDestination, resumeRoute, cancelDeviationWarning, batteryOptimizationDenied, openBatterySettings } = useSafeWindow();
   
   const [timeLeft, setTimeLeft] = useState(getRemainingSeconds());
   const [checkInTimeLeft, setCheckInTimeLeft] = useState(getCheckInRemainingSeconds());
+  const [warningTimeLeft, setWarningTimeLeft] = useState(0);
   
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<PlaceResult[]>([]);
@@ -19,6 +20,7 @@ export const SafeWindowScreen: React.FC = () => {
   
   const [isStarting, setIsStarting] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const searchTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -29,6 +31,12 @@ export const SafeWindowScreen: React.FC = () => {
       interval = setInterval(() => {
         setTimeLeft(getRemainingSeconds());
         setCheckInTimeLeft(getCheckInRemainingSeconds());
+        if (safeWindow.routeDeviationWarningAt && !safeWindow.routeDeviationDetected) {
+          const now = new Date().getTime();
+          const warningTime = new Date(safeWindow.routeDeviationWarningAt).getTime();
+          const elapsed = Math.floor((now - warningTime) / 1000);
+          setWarningTimeLeft(Math.max(0, 60 - elapsed));
+        }
       }, 1000);
     } else {
       setTimeLeft(0);
@@ -39,15 +47,26 @@ export const SafeWindowScreen: React.FC = () => {
     };
   }, [safeWindow.status, safeWindow.endsAt, safeWindow.checkInDueAt, getRemainingSeconds, getCheckInRemainingSeconds]);
 
-  const handleSearch = async (text: string) => {
+  const handleSearch = (text: string) => {
     setSearchQuery(text);
+    
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
     if (text.length > 2) {
       setIsSearching(true);
-      const results = await searchPlaces(text);
-      setSearchResults(results);
-      setIsSearching(false);
+      searchTimeoutRef.current = setTimeout(async () => {
+        try {
+          const results = await searchPlaces(text);
+          setSearchResults(results);
+        } finally {
+          setIsSearching(false);
+        }
+      }, 1000); // 1-second debounce to respect Nominatim limits
     } else {
       setSearchResults([]);
+      setIsSearching(false);
     }
   };
 
@@ -152,6 +171,25 @@ export const SafeWindowScreen: React.FC = () => {
                         <Text style={styles.routeTitle}>Route Tracking Active</Text>
                      </View>
                      <Text style={styles.routeText}>Distance to destination: <Text style={{fontWeight: 'bold'}}>{formatDistance(distanceToDestination)}</Text></Text>
+                     {safeWindow.routeDeviationWarningAt && !safeWindow.routeDeviationDetected && (
+                       <View style={styles.warningBox}>
+                         <Text style={styles.warningTitle}>Route Deviation Warning</Text>
+                         <Text style={styles.warningText}>You appear to be off route. Alerting guardians in {warningTimeLeft}s.</Text>
+                         <View style={{flexDirection: 'row', gap: 10, marginTop: 10}}>
+                           <PrimaryButton title="I'm OK" variant="primary" onPress={cancelDeviationWarning} style={{flex: 1}} />
+                           <PrimaryButton title="Update Route" variant="outline" onPress={resumeRoute} style={{flex: 1}} />
+                         </View>
+                       </View>
+                     )}
+                     
+                     {batteryOptimizationDenied && (
+                       <View style={styles.warningBox}>
+                         <Text style={styles.warningTitle}>⚠️ Tracking Reliability Reduced</Text>
+                         <Text style={styles.warningText}>SafeHer may be killed by your phone when the screen is off. Please exempt it from battery optimizations.</Text>
+                         <PrimaryButton title="Fix Settings" variant="outline" onPress={openBatterySettings} style={{marginTop: 10}} />
+                       </View>
+                     )}
+
                      {safeWindow.routeDeviationDetected && (
                        <View style={styles.deviationBox}>
                          <Text style={styles.deviationText}>Deviation Detected! Immediate check-in required.</Text>
@@ -291,6 +329,9 @@ const styles = StyleSheet.create({
   routeText: { fontSize: 14, color: '#475569' },
   deviationBox: { marginTop: 12, backgroundColor: '#FEF2F2', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#FECACA' },
   deviationText: { color: '#DC2626', fontWeight: '700', fontSize: 13 },
+  warningBox: { marginTop: 12, backgroundColor: '#FFF7ED', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#FFEDD5' },
+  warningTitle: { color: '#C2410C', fontWeight: '800', fontSize: 14, marginBottom: 4 },
+  warningText: { color: '#9A3412', fontSize: 13 },
   endBtn: { width: '100%' },
   searchInput: { backgroundColor: '#F8FAFC', padding: 14, borderRadius: 10, color: '#1E293B', borderWidth: 1, borderColor: '#E2E8F0', fontSize: 15 },
   resultsContainer: { marginTop: 8, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', overflow: 'hidden' },

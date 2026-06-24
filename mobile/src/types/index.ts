@@ -72,5 +72,7 @@ export interface SafeWindowState {
   missedCheckInAt?: string | null;
   startLocation?: { latitude: number; longitude: number } | null;
   destinationLocation?: { latitude: number; longitude: number } | null;
+  routePoints?: {lat: number, lon: number}[];
+  routeDeviationWarningAt?: string | null;
   routeDeviationDetected?: boolean;
 }

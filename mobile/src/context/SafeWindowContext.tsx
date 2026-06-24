@@ -2,8 +2,13 @@ import React, { createContext, useState, useContext, useEffect, useRef } from 'r
 import { SafeWindowState, SafeWindowDuration } from '../types';
 import { useAlert } from './AlertContext';
 import { getCurrentLocationForAlert } from '../utils/location';
-import { distanceBetweenPointsMeters, distancePointToSegmentMeters, isRouteDeviation } from '../utils/geoUtils';
+import { distanceBetweenPointsMeters, isRouteDeviation } from '../utils/geoUtils';
 import { useContacts } from './ContactsContext';
+import { getRoute } from '../services/geocodingService';
+import { startBackgroundLocationService, stopBackgroundLocationService } from '../services/backgroundLocation';
+import { Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { checkIsExempt, requestExemption } from '../modules/BatteryOptimization';
 
 interface SafeWindowContextType {
   safeWindow: SafeWindowState;
@@ -18,6 +23,11 @@ interface SafeWindowContextType {
   getRemainingSeconds: () => number;
   getCheckInRemainingSeconds: () => number;
   distanceToDestination?: number | null;
+  resumeRoute: () => void;
+  cancelDeviationWarning: () => void;
+  batteryOptimizationDenied: boolean;
+  openBatterySettings: () => void;
+  checkAndPromptBatteryExemption: () => Promise<void>;
 }
 
 const SafeWindowContext = createContext<SafeWindowContextType | undefined>(undefined);
@@ -33,6 +43,8 @@ const initialState: SafeWindowState = {
   missedCheckInAt: null,
   startLocation: null,
   destinationLocation: null,
+  routePoints: [],
+  routeDeviationWarningAt: null,
   routeDeviationDetected: false,
 };
 
@@ -43,8 +55,56 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const { getPrimaryContact } = useContacts();
   const missedAlertCreated = useRef(false);
   const deviationAlertCreated = useRef(false);
+  const [batteryOptimizationDenied, setBatteryOptimizationDenied] = useState(false);
 
-  const startSafeWindow = (
+  useEffect(() => {
+    AsyncStorage.getItem('@battery_prompt_shown').then(status => {
+      if (status === 'denied') setBatteryOptimizationDenied(true);
+    });
+  }, []);
+
+  const openBatterySettings = async () => {
+    await requestExemption();
+    // Optimistically assume they changed it, or at least re-evaluate next time
+    await AsyncStorage.removeItem('@battery_prompt_shown');
+    setBatteryOptimizationDenied(false);
+  };
+
+  const checkAndPromptBatteryExemption = async () => {
+    try {
+      const isExempt = await checkIsExempt();
+      if (!isExempt) {
+        const prompted = await AsyncStorage.getItem('@battery_prompt_shown');
+        if (!prompted) {
+          Alert.alert(
+            'Background Reliability',
+            'For your safety, SafeHer needs permission to ignore battery optimizations so we can track your journey even when the screen is off.',
+            [
+              {
+                text: 'Not Now',
+                style: 'cancel',
+                onPress: () => {
+                   AsyncStorage.setItem('@battery_prompt_shown', 'denied');
+                   setBatteryOptimizationDenied(true);
+                }
+              },
+              {
+                text: 'Allow',
+                onPress: async () => {
+                   await AsyncStorage.setItem('@battery_prompt_shown', 'granted');
+                   await requestExemption();
+                }
+              }
+            ]
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('Battery optimization check failed', e);
+    }
+  };
+
+  const startSafeWindow = async (
     durationMinutes: SafeWindowDuration,
     startLoc?: {latitude: number, longitude: number},
     destLoc?: {latitude: number, longitude: number}
@@ -56,9 +116,15 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const durationMs = durationMinutes * 60 * 1000;
     const endsAt = new Date(now.getTime() + durationMs);
     
-    // checkInDueAt: demo mode 15 seconds, normal mode 5 minutes
     const checkInDueMs = demoMode ? 15 * 1000 : 5 * 60 * 1000;
     const checkInDueAt = new Date(now.getTime() + checkInDueMs);
+
+    let initialRoute: {lat: number, lon: number}[] = [];
+    if (startLoc && destLoc) {
+      const fetchedRoute = await getRoute(startLoc, destLoc);
+      if (fetchedRoute) initialRoute = fetchedRoute;
+      else initialRoute = [{lat: startLoc.latitude, lon: startLoc.longitude}, {lat: destLoc.latitude, lon: destLoc.longitude}];
+    }
 
     setSafeWindow({
       status: 'ACTIVE',
@@ -71,17 +137,22 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       missedCheckInAt: null,
       startLocation: startLoc || null,
       destinationLocation: destLoc || null,
+      routePoints: initialRoute,
+      routeDeviationWarningAt: null,
       routeDeviationDetected: false,
     });
     setDistanceToDestination(null);
+
+    // Start background polling service
+    startBackgroundLocationService();
   };
 
   const endSafeWindow = () => {
     setSafeWindow(prev => ({
       ...prev,
       status: 'COMPLETED',
-      // Keep startedAt and endsAt for display if useful
     }));
+    stopBackgroundLocationService();
   };
 
   const markCheckInSafe = () => {
@@ -133,7 +204,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           } as any);
         });
       }
-      
+      stopBackgroundLocationService();
       return {
         ...prev,
         status: 'MISSED_CHECKIN',
@@ -142,7 +213,35 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     });
   };
 
-  // Auto-detect missed check-in, window expiry, and route deviation
+  const resumeRoute = async () => {
+    if (!safeWindow.destinationLocation) return;
+    try {
+      const currentLoc = await getCurrentLocationForAlert();
+      if (currentLoc && !currentLoc.permissionDenied) {
+        const start = { latitude: currentLoc.latitude, longitude: currentLoc.longitude };
+        const fetchedRoute = await getRoute(start, safeWindow.destinationLocation);
+        if (fetchedRoute) {
+          setSafeWindow(prev => ({
+            ...prev,
+            routePoints: fetchedRoute,
+            routeDeviationWarningAt: null,
+            routeDeviationDetected: false
+          }));
+        }
+      }
+    } catch (e) {
+      console.warn("Could not resume route", e);
+    }
+  };
+
+  const cancelDeviationWarning = () => {
+    setSafeWindow(prev => ({
+      ...prev,
+      routeDeviationWarningAt: null,
+      routeDeviationDetected: false
+    }));
+  };
+
   useEffect(() => {
     let interval: NodeJS.Timeout;
     
@@ -150,61 +249,74 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       interval = setInterval(() => {
         const now = new Date().getTime();
         
-        // Check if check-in missed
+        // Missed check-in
         if (safeWindow.checkInDueAt && now >= new Date(safeWindow.checkInDueAt).getTime()) {
           markMissedCheckIn();
         } else if (safeWindow.endsAt && now >= new Date(safeWindow.endsAt).getTime()) {
-          // Check if window ended
           endSafeWindow();
         }
 
         // Route monitoring
-        if (safeWindow.startLocation && safeWindow.destinationLocation) {
+        if (safeWindow.routePoints && safeWindow.routePoints.length > 0 && safeWindow.destinationLocation) {
           getCurrentLocationForAlert().then(loc => {
             if (loc && !loc.permissionDenied) {
               const currentLoc = { lat: loc.latitude, lon: loc.longitude };
-              const startLoc = { lat: safeWindow.startLocation!.latitude, lon: safeWindow.startLocation!.longitude };
               const destLoc = { lat: safeWindow.destinationLocation!.latitude, lon: safeWindow.destinationLocation!.longitude };
               
               const distToDest = distanceBetweenPointsMeters(currentLoc.lat, currentLoc.lon, destLoc.lat, destLoc.lon);
               setDistanceToDestination(distToDest);
 
-              if (isRouteDeviation(currentLoc, startLoc, destLoc, 300) && !safeWindow.routeDeviationDetected) {
-                // Route deviation detected! Prompt check-in.
+              if (isRouteDeviation(currentLoc, safeWindow.routePoints!, 300)) {
                 setSafeWindow(prev => {
                   if (prev.routeDeviationDetected) return prev;
-                  // Force an immediate check-in
-                  const promptTime = new Date(now + 30 * 1000).toISOString();
-                  return { ...prev, routeDeviationDetected: true, checkInDueAt: promptTime };
+                  if (!prev.routeDeviationWarningAt) {
+                    // Start 60s grace period
+                    return { ...prev, routeDeviationWarningAt: new Date().toISOString() };
+                  }
+                  
+                  // If warning started, check if 60s elapsed
+                  const warningTime = new Date(prev.routeDeviationWarningAt).getTime();
+                  if (now - warningTime >= 60000) {
+                    // Trigger alert
+                    if (!deviationAlertCreated.current) {
+                      deviationAlertCreated.current = true;
+                      const primary = getPrimaryContact();
+                      createAlert({
+                        triggerType: 'ROUTE_DEVIATION',
+                        status: 'ACTIVE',
+                        visibleMessage: 'Route deviation detected',
+                        cancelMethod: 'NONE',
+                        location: loc,
+                        guardian_name: primary?.name,
+                        guardian_phone: primary?.phone,
+                        guardian_email: primary?.email
+                      } as any);
+                    }
+                    return { ...prev, routeDeviationDetected: true };
+                  }
+                  return prev;
                 });
-                
-                if (!deviationAlertCreated.current) {
-                  deviationAlertCreated.current = true;
-                  const primary = getPrimaryContact();
-                  createAlert({
-                    triggerType: 'ROUTE_DEVIATION',
-                    status: 'ACTIVE',
-                    visibleMessage: 'Route deviation detected',
-                    cancelMethod: 'NONE',
-                    location: loc,
-                    guardian_name: primary?.name,
-                    guardian_phone: primary?.phone,
-                    guardian_email: primary?.email
-                  } as any);
-                }
+              } else {
+                // Not deviated, clear warning if present
+                setSafeWindow(prev => {
+                  if (prev.routeDeviationWarningAt && !prev.routeDeviationDetected) {
+                    return { ...prev, routeDeviationWarningAt: null };
+                  }
+                  return prev;
+                });
               }
             }
           }).catch(err => {
              console.log("SafeWindow location check failed", err);
           });
         }
-      }, 5000); // Check every 5 seconds for demo responsiveness
+      }, 5000);
     }
 
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [safeWindow.status, safeWindow.endsAt, safeWindow.checkInDueAt, safeWindow.startLocation, safeWindow.destinationLocation, safeWindow.routeDeviationDetected]);
+  }, [safeWindow.status, safeWindow.endsAt, safeWindow.checkInDueAt, safeWindow.routePoints, safeWindow.routeDeviationDetected, safeWindow.routeDeviationWarningAt]);
 
   const getRemainingSeconds = () => {
     if (safeWindow.status === 'INACTIVE' || safeWindow.status === 'COMPLETED' || safeWindow.status === 'MISSED_CHECKIN') return 0;
@@ -234,6 +346,11 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       getRemainingSeconds,
       getCheckInRemainingSeconds,
       distanceToDestination,
+      resumeRoute,
+      cancelDeviationWarning,
+      batteryOptimizationDenied,
+      openBatterySettings,
+      checkAndPromptBatteryExemption
     }}>
       {children}
     </SafeWindowContext.Provider>

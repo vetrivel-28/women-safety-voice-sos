@@ -1,6 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import auth, alerts, guardians, sos
+from app.api import auth, alerts, guardians, sos, profile
 from app.core.config import settings
 from app.db.client import get_supabase_client
 from contextlib import asynccontextmanager
@@ -31,6 +31,17 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.info(f"===> [MIDDLEWARE] INCOMING REQUEST: {request.method} {request.url}")
+    try:
+        response = await call_next(request)
+        logger.info(f"<=== [MIDDLEWARE] OUTGOING RESPONSE: {response.status_code}")
+        return response
+    except Exception as e:
+        logger.error(f"<=== [MIDDLEWARE] EXCEPTION: {str(e)}")
+        raise
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +56,7 @@ app.include_router(auth.router)
 app.include_router(alerts.router)
 app.include_router(guardians.router)
 app.include_router(sos.router)
+app.include_router(profile.router)
 
 @app.get("/")
 async def root():
