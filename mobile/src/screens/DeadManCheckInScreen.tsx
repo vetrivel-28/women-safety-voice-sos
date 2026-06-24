@@ -92,7 +92,7 @@ export const DeadManCheckInScreen: React.FC = () => {
           <View style={styles.errorCard}>
             <Text style={styles.errorIcon}>⚠️</Text>
             <Text style={styles.errorTitle}>Missed Check-in</Text>
-            <Text style={styles.errorText}>A Silent SOS has been triggered and your guardians have been notified.</Text>
+            <Text style={styles.errorText}>A Silent SOS has been triggered and the system is attempting to notify your guardians.</Text>
             <PrimaryButton 
               title="Manage Alert" 
               variant="outline" 

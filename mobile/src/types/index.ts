@@ -62,6 +62,7 @@ export type SafeWindowStatus = 'INACTIVE' | 'ACTIVE' | 'COMPLETED' | 'MISSED_CHE
 export type SafeWindowDuration = 15 | 30 | 60 | 0.5;
 
 export interface SafeWindowState {
+  journeyId?: string;
   status: SafeWindowStatus;
   durationMinutes: SafeWindowDuration | null;
   startedAt: string | null;

@@ -18,7 +18,7 @@ export const SOSScreen: React.FC = () => {
   const [demoNote, setDemoNote] = useState('');
   const [alertId, setAlertId] = useState<string | null>(null);
   const [locationStatus, setLocationStatus] = useState('');
-  const [notificationState, setNotificationState] = useState<'Not Started' | 'Preparing' | 'Ready to Send' | 'Sent' | 'Failed' | 'Pending Provider'>('Not Started');
+  const [notificationState, setNotificationState] = useState<'Not Started' | 'Preparing' | 'Ready to Send' | 'Sent' | 'Failed' | 'Pending Provider' | 'Fallback (Manual SMS)'>('Not Started');
   
   const hasCreatedAlert = useRef(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -49,45 +49,33 @@ export const SOSScreen: React.FC = () => {
         hasCreatedAlert.current = true;
         setStatus('ACTIVE');
         setMessage('🚨 SOS Alert Sent 🚨');
-        setLocationStatus('Getting your location...');
+        setLocationStatus('Sending to backend...');
         
-        getCurrentLocationForAlert().then(locationData => {
+        getCurrentLocationForAlert().then(async locationData => {
           const loc = locationData && !locationData.permissionDenied ? locationData : undefined;
           const primaryGuardian = [...contacts].sort((a, b) => a.priority - b.priority)[0];
-          const newId = createAlert({
-            triggerType: 'MANUAL_SOS',
-            status: 'ACTIVE',
-            visibleMessage: 'SOS Alert Sent',
-            cancelMethod: 'NONE',
-            location: loc,
-            guardian_name: primaryGuardian?.name,
-            guardian_phone: primaryGuardian?.phone,
-            guardian_email: primaryGuardian?.email
-          });
-          setAlertId(newId);
-          setLocationStatus(loc ? 'Location attached ✓' : 'Location unavailable — alert still sent');
-
-          // Trigger SMS fallback for primary guardian
-          if (primaryGuardian && primaryGuardian.phone) {
-            setNotificationState('Ready to Send');
-            const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            let smsBody = `SafeHer Alert: I triggered a Manual SOS at ${timeStr}.`;
-            if (loc && loc.latitude && loc.longitude) {
-               smsBody += ` Location: https://maps.google.com/?q=${loc.latitude},${loc.longitude}`;
-            }
-            smsBody += ` Please check the dashboard immediately.`;
-            
-            Linking.openURL(`sms:${primaryGuardian.phone}?body=${encodeURIComponent(smsBody)}`).then(() => {
-               setNotificationState('Sent');
-            }).catch(() => {
-               setNotificationState('Failed');
-               console.log('Failed to open SMS composer');
+          
+          try {
+            const newId = await createAlert({
+              triggerType: 'MANUAL_SOS',
+              status: 'ACTIVE',
+              visibleMessage: 'SOS Alert Sent',
+              cancelMethod: 'NONE',
+              location: loc,
+              guardian_name: primaryGuardian?.name,
+              guardian_phone: primaryGuardian?.phone,
+              guardian_email: primaryGuardian?.email
             });
-          } else {
-            setNotificationState('Pending Provider');
+            setAlertId(newId);
+            setLocationStatus(loc ? 'Location attached ✓' : 'Location unavailable — alert still sent');
+            setNotificationState('Sent');
+          } catch (e) {
+            setLocationStatus('Failed to send alert');
+            setNotificationState('Failed');
           }
         }).catch(error => {
           console.log("SOS_SCREEN: error =", error);
+          setNotificationState('Failed');
         });
       }
     }
@@ -163,10 +151,14 @@ export const SOSScreen: React.FC = () => {
                    return (
                      <>
                        <Text style={styles.escalationItem}>
-                         ✓ {primaryGuardian ? primaryGuardian.name : 'Primary Guardian'} (SMS/Email): {notificationState}
+                         ✓ {primaryGuardian ? primaryGuardian.name : 'Primary Guardian'}: {notificationState}
                        </Text>
                        <Text style={styles.escalationItemPending}>⧗ Backend synchronization verified.</Text>
-                       <Text style={styles.escalationItemPending}>⧗ Awaiting response from {primaryGuardian ? primaryGuardian.name : 'guardians'}...</Text>
+                       {notificationState === 'Fallback (Manual SMS)' || notificationState === 'Failed' ? (
+                         <Text style={styles.escalationItemPending}>⚠️ Automatic SMS provider not configured. Using manual SMS fallback.</Text>
+                       ) : (
+                         <Text style={styles.escalationItemPending}>⧗ Awaiting response from {primaryGuardian ? primaryGuardian.name : 'guardians'}...</Text>
+                       )}
                      </>
                    );
                  })()}

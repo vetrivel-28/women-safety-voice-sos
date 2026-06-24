@@ -17,50 +17,44 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/guardians", tags=["guardians"])
 
 
-@router.get("", response_model=List[GuardianResponse])
+@router.get("", response_model=List[dict])
 def get_guardians(auth_data: dict = Depends(get_current_user)):
     user = auth_data["user"]
     service_client = get_service_role_client()
 
     try:
-        result = service_client.table("guardians").select("*").eq("user_id", user.id).execute()
-        return result.data
+        # Get links where this user is the user_id (they linked a guardian)
+        result = service_client.table("guardian_links").select("id, status, created_at, profiles!guardian_links_guardian_user_id_fkey(id, full_name, phone, email)").eq("user_id", user.id).execute()
+        
+        # Flatten the response to be somewhat compatible
+        mapped = []
+        for row in result.data or []:
+            prof = row.get("profiles", {})
+            mapped.append({
+                "id": row["id"],
+                "guardian_user_id": prof.get("id"),
+                "name": prof.get("full_name") or "Unknown",
+                "phone": prof.get("phone") or "",
+                "email": prof.get("email") or "",
+                "status": row["status"],
+                "created_at": row["created_at"]
+            })
+        return mapped
     except Exception as e:
         logger.error(f"Error fetching guardians: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not fetch guardians")
 
-
-@router.post("", response_model=GuardianResponse, status_code=status.HTTP_201_CREATED)
-def add_guardian(guardian_in: GuardianCreate, auth_data: dict = Depends(get_current_user)):
+@router.delete("/{link_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_guardian_link(link_id: str, auth_data: dict = Depends(get_current_user)):
     user = auth_data["user"]
     service_client = get_service_role_client()
 
     try:
-        guardian_data = guardian_in.model_dump()
-        guardian_data["user_id"] = user.id
-        
-        result = service_client.table("guardians").insert(guardian_data).execute()
-        if not result.data:
-            raise HTTPException(status_code=500, detail="Failed to add guardian")
-        return result.data[0]
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error adding guardian: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not add guardian")
-
-
-@router.delete("/{guardian_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_guardian(guardian_id: str, auth_data: dict = Depends(get_current_user)):
-    user = auth_data["user"]
-    service_client = get_service_role_client()
-
-    try:
-        result = service_client.table("guardians").delete().eq("id", guardian_id).eq("user_id", user.id).execute()
+        result = service_client.table("guardian_links").delete().eq("id", link_id).eq("user_id", user.id).execute()
         return
     except Exception as e:
-        logger.error(f"Error deleting guardian: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not delete guardian")
+        logger.error(f"Error deleting guardian link: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not delete guardian link")
 
 
 @router.post(

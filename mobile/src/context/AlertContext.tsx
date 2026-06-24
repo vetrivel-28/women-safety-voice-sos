@@ -1,6 +1,7 @@
 import React, { createContext, useState, useContext, useEffect, useRef } from 'react';
 import { SOSAlert, TriggerType, AlertStatus } from '../types';
 import { supabase } from '../lib/supabaseClient';
+import { API_BASE_URL } from '../api/client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 
@@ -15,7 +16,7 @@ interface AlertContextType {
     guardian_name?: string;
     guardian_phone?: string;
     guardian_email?: string;
-  }) => string;
+  }) => Promise<string>;
   updateAlert: (alertId: string, updates: Partial<SOSAlert>) => void;
   resolveAlert: (alertId: string) => Promise<void>;
   cancelAlert: (alertId: string, cancelMethod: 'REAL_PIN' | 'DURESS_PIN' | 'NONE') => Promise<void>;
@@ -87,9 +88,7 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-      const apiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://10.0.2.2:8000';
-
-      const response = await fetch(`${apiUrl}/api/sos/create`, {
+      const response = await fetch(`${API_BASE_URL}/api/sos/create`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -130,7 +129,7 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const createAlert = ({
+  const createAlert = async ({
     triggerType,
     status,
     visibleMessage,
@@ -148,7 +147,7 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     guardian_name?: string;
     guardian_phone?: string;
     guardian_email?: string;
-  }): string => {
+  }): Promise<string> => {
     const id = Date.now().toString();
     const ownerId = currentUserId || 'local_guest';
     const newAlert: SOSAlert = {
@@ -166,8 +165,8 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     setAlerts(prev => [newAlert, ...prev]);
 
-    // Silently attempt to sync to backend
-    syncToBackend(newAlert, ownerId, {
+    // Await sync to backend so caller can know when it's done
+    await syncToBackend(newAlert, ownerId, {
       name: guardian_name,
       phone: guardian_phone,
       email: guardian_email
@@ -184,8 +183,7 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
 
-      const apiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://10.0.2.2:8000';
-      const response = await fetch(`${apiUrl}/api/sos/${alert.backendId}`, {
+      const response = await fetch(`${API_BASE_URL}/api/sos/${alert.backendId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',

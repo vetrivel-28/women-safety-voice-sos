@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
-from app.db.client import get_supabase_client
+from app.db.client import get_user_supabase_client
 from app.api.auth import get_current_user
 from app.schemas.profile import ProfileUpdate, ProfileResponse
 import logging
@@ -16,7 +16,7 @@ router = APIRouter(
 @router.get("", response_model=ProfileResponse)
 async def get_profile(user: dict = Depends(get_current_user)):
     try:
-        supabase = get_supabase_client()
+        supabase = get_user_supabase_client(user["token"])
         user_id = user["user"].id
         
         response = supabase.table("profiles").select("*").eq("id", user_id).execute()
@@ -42,7 +42,7 @@ async def get_profile(user: dict = Depends(get_current_user)):
 @router.patch("", response_model=ProfileResponse)
 async def update_profile(profile_data: ProfileUpdate, user: dict = Depends(get_current_user)):
     try:
-        supabase = get_supabase_client()
+        supabase = get_user_supabase_client(user["token"])
         user_id = user["user"].id
         
         existing = supabase.table("profiles").select("*").eq("id", user_id).execute()

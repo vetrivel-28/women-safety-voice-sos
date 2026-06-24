@@ -20,3 +20,4 @@ export const reverseGeocode = async (latitude: number, longitude: number): Promi
 export const getRoute = async (start: {latitude: number, longitude: number}, destination: {latitude: number, longitude: number}): Promise<{lat: number, lon: number}[] | null> => {
   return provider.getRoute(start, destination);
 };
+

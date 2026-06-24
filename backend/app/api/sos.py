@@ -27,9 +27,18 @@ def create_sos_alert(alert_in: AlertCreate, auth_data: dict = Depends(get_curren
     except Exception as e:
         logger.warning(f"Profile upsert failed, but continuing: {e}")
 
+    raw_trigger = alert_in.trigger_type.value if hasattr(alert_in.trigger_type, 'value') else str(alert_in.trigger_type)
+    norm_trigger = raw_trigger
+    if raw_trigger in ['MANUAL', 'SOS', 'MANUAL_SOS']:
+        norm_trigger = 'MANUAL_SOS'
+    elif raw_trigger in ['SILENT', 'SILENT_SOS']:
+        norm_trigger = 'SILENT_SOS'
+    elif raw_trigger in ['JOURNEY_MISSED_CHECKIN', 'SAFE_WINDOW_MISSED_CHECKIN', 'JOURNEY_MISSED']:
+        norm_trigger = 'JOURNEY_MISSED_CHECKIN'
+
     alert_data = {
         "user_id": user.id,
-        "trigger_type": alert_in.trigger_type.value,
+        "trigger_type": norm_trigger,
         "status": alert_in.status.value,
         "cancel_method": alert_in.cancel_method.value if alert_in.cancel_method else "NONE",
         "visible_message": alert_in.visible_message,
@@ -44,33 +53,46 @@ def create_sos_alert(alert_in: AlertCreate, auth_data: dict = Depends(get_curren
             raise HTTPException(status_code=500, detail="Failed to insert alert")
             
         created_alert = result.data[0]
-        
-        # Trigger guardian notification
-        if alert_in.guardian_phone or alert_in.guardian_email:
-            contact = {
-                "name": alert_in.guardian_name,
-                "phone": alert_in.guardian_phone,
-                "email": alert_in.guardian_email
-            }
-            location = None
-            if alert_in.latitude and alert_in.longitude:
-                location = {"lat": alert_in.latitude, "long": alert_in.longitude}
-                
-            notif_status = notification_service.notify_guardian(
-                contact=contact,
-                alert_type=alert_in.trigger_type.value,
-                user=user,
-                location=location
-            )
-            logger.info(f"Notification status: {notif_status}")
-            
-        return created_alert
     except Exception as e:
         logger.error(f"insert exception: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not save alert to database"
         )
+        
+    # Trigger guardian notification, do not fail endpoint on error
+    try:
+        location = None
+        if alert_in.latitude and alert_in.longitude:
+            location = {"lat": alert_in.latitude, "long": alert_in.longitude}
+            
+        # Optional: Notify primary if specifically passed from frontend
+        if alert_in.guardian_phone or getattr(alert_in, 'guardian_email', None):
+            contact = {
+                "name": alert_in.guardian_name,
+                "phone": alert_in.guardian_phone,
+                "email": getattr(alert_in, 'guardian_email', None)
+            }
+            notif_status = notification_service.notify_guardian(
+                contact=contact,
+                alert_type=norm_trigger,
+                user=user,
+                location=location
+            )
+            logger.info(f"Primary Notification status: {notif_status}")
+            
+        # Notify all stored guardians
+        all_status = notification_service.notify_all_guardians(
+            user_id=user.id,
+            alert_type=norm_trigger,
+            user=user,
+            location=location
+        )
+        logger.info(f"All stored guardians notification status: {all_status}")
+    except Exception as e:
+        logger.error(f"Notification error (ignored): {e}")
+        
+    return created_alert
 
 from pydantic import BaseModel
 from typing import Optional

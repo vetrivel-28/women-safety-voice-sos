@@ -21,6 +21,7 @@ export default function Dashboard({ session }: { session: any }) {
   }, []);
 
   const fetchAlerts = async (showLoading = true) => {
+    if (!session?.access_token) return;
     if (showLoading) setLoading(true);
     try {
       const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/alerts`, {
@@ -28,6 +29,10 @@ export default function Dashboard({ session }: { session: any }) {
           'Authorization': `Bearer ${session.access_token}`
         }
       });
+      if (response.status === 401) {
+        supabase.auth.signOut();
+        return;
+      }
       if (!response.ok) throw new Error('Failed to fetch live alerts from backend');
       const data = await response.json();
       setAlerts(data);

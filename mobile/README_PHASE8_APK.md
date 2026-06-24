@@ -1,44 +1,26 @@
-# SafeHer Phase 8 — APK Build Guide
+# SafeHer APK Build Instructions & Notes
 
-## Prerequisites Checklist
-- [ ] Verify app runs in Expo Go without crashes
-- [ ] Verify Manual SOS, Silent SOS, Duress PIN, Real PIN all work
-- [ ] Verify Safe Window and Dead Man Check-in work
-- [ ] Verify Alert History shows all alert types
-- [ ] Verify location permission request and graceful denial handling
+## Expo Go Testing
+To test this app on a physical device using Expo Go:
+1. Ensure your phone and development laptop are on the **same Wi-Fi network**.
+2. Run `npx expo start -c` from the `mobile` directory.
+3. If connecting to a local backend, your `EXPO_PUBLIC_API_BASE_URL` should point to your laptop's local IP address (e.g. `http://192.168.1.5:8000`), NOT `http://localhost:8000` or `127.0.0.1`, because the phone's localhost is the phone itself.
+4. Scan the QR code using the Expo Go app.
 
-## Backend URL Configuration
-- For Expo Go on physical device: update `.env` `EXPO_PUBLIC_API_BASE_URL` to your laptop's local IP (e.g. `http://192.168.1.45:8000`)
-- For emulator: use `http://10.0.2.2:8000`
-- For production: update to deployed backend URL
-- **NEVER** place SUPABASE_SERVICE_ROLE_KEY in mobile code
+## Backend Dependencies
+- Ensure the backend is running (`uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`).
+- **Important:** The service-role key (`SUPABASE_SERVICE_ROLE_KEY`) must **only** be stored in the `backend/.env` file. Do not include it in the mobile app or dashboard for security reasons.
+- **Notifications:** Automatic SMS/Email generation relies on the backend provider configuration (`NOTIFICATION_PROVIDER`). If it's not set up, it will gracefully fallback and not crash.
 
-## Dashboard URL
-- Local development: `http://localhost:5173`
-- Dashboard reads from backend at `VITE_API_BASE_URL` in dashboard/.env
-
-## EAS Build Commands
+## APK Readiness (For Later Deployment)
+Do not generate the APK now. When you are ready to build the standalone APK:
 ```bash
-# Login to Expo
-npx eas-cli@latest login
-
-# Configure project (first time only)
-npx eas-cli@latest build:configure
-
-# Build preview APK
-npx eas-cli@latest build -p android --profile preview
-
-# Build production AAB
-npx eas-cli@latest build -p android --profile production
+npx eas-cli build -p android --profile preview
 ```
 
-## Known Limitations (V1)
-- Backend sync is offline-first (fire-and-forget)
-- SMS/Voice triggers are not implemented
-- Background location tracking is not implemented
-- No push notifications yet
+**Known Limitations in V1/V2:**
+- The shake-to-trigger SOS and Voice Guard features are placeholders for future sensor integrations.
+- Background location and background timer tracking limitations may apply on some Android/iOS versions when using purely Expo Go without native background plugins configured aggressively.
 
-## Security Reminders
-- SUPABASE_SERVICE_ROLE_KEY must ONLY exist in backend/.env
-- Do NOT commit .env files
-- Update EXPO_PUBLIC_API_BASE_URL before building APK for physical device testing
+## Environment Variables
+Never track `.env` files in git. All secrets should be excluded in `.gitignore`.

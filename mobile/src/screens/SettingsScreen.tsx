@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform, Alert, TextInput, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform, Alert, Switch, TouchableOpacity, TextInput, KeyboardAvoidingView, Linking, ActivityIndicator } from 'react-native';
 import { supabase } from '../lib/supabaseClient';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SectionHeader } from '../components/SectionHeader';
+import { useContacts } from '../context/ContactsContext';
 
 
-const rawApiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || process.env.EXPO_PUBLIC_API_URL || 'http://10.0.2.2:8000';
-const API_BASE_URL = rawApiUrl.trim().replace(/\/$/, '');
-console.log('API_BASE_URL =', API_BASE_URL);
+import { API_BASE_URL } from '../api/client';
 export const SettingsScreen: React.FC = () => {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [session, setSession] = useState<any>(null);
@@ -26,6 +25,9 @@ export const SettingsScreen: React.FC = () => {
     const time = new Date().toLocaleTimeString();
     setDebugLogs(prev => [...prev, `[${time}] ${msg}`]);
   };
+
+  const { contacts, getPrimaryContact } = useContacts();
+  const [devMode, setDevMode] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -106,7 +108,7 @@ export const SettingsScreen: React.FC = () => {
       }, 15000);
       console.log('REQUEST URL =', `${API_BASE_URL}/api/profile`);
       const response = await fetch(`${API_BASE_URL}/api/profile`, {
-        method: 'POST',
+        method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${currentSession.access_token}`,
           'Content-Type': 'application/json',
@@ -153,6 +155,8 @@ export const SettingsScreen: React.FC = () => {
     );
   };
 
+  const primaryContact = getPrimaryContact();
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
@@ -169,10 +173,10 @@ export const SettingsScreen: React.FC = () => {
 
         <View style={styles.header}>
           <Text style={styles.title}>Settings</Text>
-          <Text style={styles.subtitle}>App preferences and account.</Text>
+          <Text style={styles.subtitle}>Preferences, Privacy, and Account.</Text>
         </View>
 
-        <SectionHeader title="Account" />
+        <SectionHeader title="Profile" />
         <View style={styles.card}>
           <View style={styles.accountRow}>
             <View style={styles.avatarCircle}>
@@ -180,7 +184,7 @@ export const SettingsScreen: React.FC = () => {
             </View>
             <View>
               <Text style={styles.userEmail}>{userEmail || 'Local Guest'}</Text>
-              <Text style={styles.userStatus}>Status: {userEmail ? 'Verified Account' : 'Demo Mode'}</Text>
+              <Text style={styles.userStatus}>Status: Active</Text>
             </View>
           </View>
           <PrimaryButton title="Log Out" variant="danger" onPress={handleLogout} style={{ marginTop: 16 }} />
@@ -213,22 +217,77 @@ export const SettingsScreen: React.FC = () => {
           </>
         )}
 
-        <SectionHeader title="Security & PINs" />
+        <SectionHeader title="Emergency Contacts" />
         <View style={styles.card}>
-          <Text style={styles.listItem}>• Cancel PIN: <Text style={styles.bold}>1234</Text></Text>
-          <Text style={styles.listItem}>• Duress PIN: <Text style={styles.bold}>4321</Text></Text>
-          <Text style={styles.listItem}>Duress PIN can make the phone look safe while keeping help active behind the scenes.</Text>
-          <View style={styles.noteBox}>
-            <Text style={styles.noteText}>These are demo values for V1 testing.</Text>
+          <Text style={styles.listItem}><Text style={styles.bold}>Primary Guardian:</Text> {primaryContact ? primaryContact.name : 'None set'}</Text>
+          <Text style={styles.listItem}><Text style={styles.bold}>Total Trusted Guardians:</Text> {contacts.length}</Text>
+          <Text style={styles.helperText}>Manage contacts in the Trusted Guardians tab.</Text>
+        </View>
+
+        <SectionHeader title="Safety Preferences" />
+        <View style={styles.card}>
+          <Text style={styles.listItem}><Text style={styles.bold}>Real Cancel PIN:</Text> 1234</Text>
+          <Text style={styles.listItem}><Text style={styles.bold}>Duress PIN:</Text> 4321</Text>
+          <Text style={styles.listItem}><Text style={styles.bold}>SOS Countdown:</Text> 5 Seconds</Text>
+          <View style={styles.divider} />
+          <View style={styles.toggleRow}>
+            <View style={{flex: 1}}>
+              <Text style={styles.toggleTitle}>Shake Trigger (Future)</Text>
+              <Text style={styles.toggleDesc}>Trigger SOS by shaking device</Text>
+            </View>
+            <Switch value={false} disabled={true} />
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.toggleRow}>
+            <View style={{flex: 1}}>
+              <Text style={styles.toggleTitle}>Voice Guard (Future)</Text>
+              <Text style={styles.toggleDesc}>Voice activation</Text>
+            </View>
+            <Switch value={false} disabled={true} />
           </View>
         </View>
 
-        <SectionHeader title="Privacy Info" />
+        <SectionHeader title="Journey Mode Preferences" />
         <View style={styles.card}>
-          <Text style={styles.listItem}>SafeHer does not use always-on microphone or camera in this version.</Text>
-          <Text style={styles.listItem}>Location is only shared during SOS, Journey Mode, and active alerts to protect your privacy.</Text>
+          <Text style={styles.listItem}><Text style={styles.bold}>Default Duration:</Text> 30 min</Text>
+          <Text style={styles.listItem}><Text style={styles.bold}>Default Check-in:</Text> 5 min</Text>
+          <Text style={styles.listItem}><Text style={styles.bold}>Deviation Threshold:</Text> 300 meters</Text>
         </View>
 
+        <SectionHeader title="Guardian Notifications" />
+        <View style={styles.card}>
+          <View style={styles.infoBox}>
+             <Text style={styles.infoText}>Automatic SMS/push provider is not configured. Manual message fallback is available for visible SOS.</Text>
+          </View>
+        </View>
+
+        <SectionHeader title="Privacy" />
+        <View style={styles.card}>
+          <Text style={styles.listItem}>• Location is used during SOS and Journey Mode.</Text>
+          <Text style={styles.listItem}>• Location is not continuously tracked in normal mode.</Text>
+          <Text style={styles.listItem}>• Microphone is off by default.</Text>
+          <Text style={styles.listItem}>• Offline alerts are stored locally until sync is available.</Text>
+          <Text style={styles.listItem}>• Silent alerts are for situations where a visible alarm may be unsafe.</Text>
+        </View>
+
+        <SectionHeader title="App Info" />
+        <View style={styles.card}>
+          <Text style={styles.listItem}><Text style={styles.bold}>Version:</Text> 1.0.0</Text>
+          <Text style={styles.listItem}><Text style={styles.bold}>Environment:</Text> Development</Text>
+          <Text style={styles.helperText}>SafeHer is designed for personal safety. If you are in immediate danger, always contact local emergency services.</Text>
+        </View>
+        
+        <TouchableOpacity style={styles.devToggle} onPress={() => setDevMode(!devMode)}>
+          <Text style={styles.devToggleText}>Toggle Dev Mode</Text>
+        </TouchableOpacity>
+
+        {devMode && (
+          <View style={styles.devCard}>
+            <Text style={styles.devTitle}>Developer Tools</Text>
+            <Text style={styles.devText}>Demo pins and mock data active.</Text>
+            <Text style={styles.devText}>Backend Sync: Active</Text>
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -237,7 +296,7 @@ export const SettingsScreen: React.FC = () => {
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#FAFAF9' },
   container: { flexGrow: 1, padding: 24, paddingTop: Platform.OS === 'ios' ? 20 : 60 },
-  header: { marginBottom: 16 },
+  header: { marginBottom: 24 },
   title: { fontSize: 32, fontWeight: '900', color: '#1E293B', marginBottom: 4, letterSpacing: -0.5 },
   subtitle: { fontSize: 16, color: '#64748B', fontWeight: '500' },
   card: {
@@ -246,14 +305,24 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: '#F1F5F9'
   },
   accountRow: { flexDirection: 'row', alignItems: 'center' },
-  avatarCircle: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#EEF2FF', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  avatarCircle: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#EEF2FF', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
   avatarText: { fontSize: 24, fontWeight: '800', color: '#4F46E5' },
-  userEmail: { fontSize: 16, fontWeight: '700', color: '#1E293B', marginBottom: 4 },
-  userStatus: { fontSize: 13, color: '#16A34A', fontWeight: '600' },
-  listItem: { fontSize: 15, color: '#475569', marginBottom: 12, lineHeight: 22 },
+  userEmail: { fontSize: 16, fontWeight: '800', color: '#1E293B', marginBottom: 4 },
+  userStatus: { fontSize: 14, color: '#16A34A', fontWeight: '700' },
+  listItem: { fontSize: 15, color: '#334155', marginBottom: 12, lineHeight: 22 },
   bold: { fontWeight: '700', color: '#1E293B' },
-  noteBox: { backgroundColor: '#F8FAFC', padding: 12, borderRadius: 8, marginTop: 8 },
-  noteText: { fontSize: 13, color: '#64748B', fontStyle: 'italic', textAlign: 'center' },
   inputLabel: { fontSize: 14, fontWeight: '700', color: '#334155', marginBottom: 6 },
-  input: { backgroundColor: '#F8FAFC', padding: 14, borderRadius: 10, color: '#1E293B', borderWidth: 1, borderColor: '#E2E8F0', fontSize: 15, marginBottom: 16 }
+  input: { backgroundColor: '#F8FAFC', padding: 14, borderRadius: 10, color: '#1E293B', borderWidth: 1, borderColor: '#E2E8F0', fontSize: 15, marginBottom: 16 },
+  helperText: { fontSize: 13, color: '#64748B', lineHeight: 20, marginTop: 8 },
+  infoBox: { backgroundColor: '#FFFBEB', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#FEF3C7' },
+  infoText: { fontSize: 14, color: '#B45309', fontWeight: '500', lineHeight: 20 },
+  toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  toggleTitle: { fontSize: 15, fontWeight: '700', color: '#1E293B', marginBottom: 4 },
+  toggleDesc: { fontSize: 13, color: '#64748B', lineHeight: 18 },
+  divider: { height: 1, backgroundColor: '#F1F5F9', marginVertical: 16 },
+  devToggle: { alignSelf: 'center', marginVertical: 20, padding: 10 },
+  devToggleText: { color: '#94A3B8', fontSize: 12, fontWeight: '600', textTransform: 'uppercase' },
+  devCard: { backgroundColor: '#F8FAFC', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 40 },
+  devTitle: { fontSize: 14, fontWeight: '700', color: '#334155', marginBottom: 8 },
+  devText: { fontSize: 12, color: '#64748B', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginBottom: 4 }
 });

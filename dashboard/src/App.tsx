@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { supabase } from './lib/supabaseClient';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
@@ -25,7 +26,12 @@ function App() {
 
   return (
     <div className="app-container">
-      {!session ? <Login /> : <Dashboard session={session} />}
+      <Routes>
+        <Route path="/login" element={!session ? <Login /> : <Navigate to="/overview" replace />} />
+        <Route path="/overview" element={session ? <Dashboard session={session} /> : <Navigate to="/login" replace />} />
+        <Route path="/" element={<Navigate to={session ? "/overview" : "/login"} replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </div>
   );
 }

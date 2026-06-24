@@ -32,36 +32,25 @@ export const SilentSOSScreen: React.FC = () => {
         hasCreatedAlert.current = true;
         setStatus('ACTIVE');
         setMessage('System Active');
-        setLocationStatus('Getting your location...');
+        setLocationStatus('Sending to backend...');
         
-        getCurrentLocationForAlert().then(locationData => {
+        getCurrentLocationForAlert().then(async locationData => {
           const primaryGuardian = [...contacts].sort((a, b) => a.priority - b.priority)[0];
-          if (locationData && !locationData.permissionDenied) {
-            const newId = createAlert({
+          try {
+            const newId = await createAlert({
               triggerType: 'SILENT_SOS',
               status: 'ACTIVE',
               visibleMessage: 'Silent SOS Alert Sent',
               cancelMethod: 'NONE',
-              location: locationData,
+              location: locationData && !locationData.permissionDenied ? locationData : undefined,
               guardian_name: primaryGuardian?.name,
               guardian_phone: primaryGuardian?.phone,
               guardian_email: primaryGuardian?.email
             });
             setAlertId(newId);
-            setLocationStatus('Location attached ✓');
-          } else {
-            const newId = createAlert({
-              triggerType: 'SILENT_SOS',
-              status: 'ACTIVE',
-              visibleMessage: 'Silent SOS Alert Sent',
-              cancelMethod: 'NONE',
-              location: locationData || undefined,
-              guardian_name: primaryGuardian?.name,
-              guardian_phone: primaryGuardian?.phone,
-              guardian_email: primaryGuardian?.email
-            });
-            setAlertId(newId);
-            setLocationStatus('Location unavailable — alert still sent');
+            setLocationStatus(locationData && !locationData.permissionDenied ? 'Location attached ✓' : 'Location unavailable — alert still sent');
+          } catch (e) {
+            setLocationStatus('Failed to send alert');
           }
         }).catch(error => {
           console.log("SILENT_SOS_SCREEN: error =", error);
@@ -134,8 +123,8 @@ export const SilentSOSScreen: React.FC = () => {
              {status === 'ACTIVE' && (
                <View style={styles.escalationBox}>
                  <Text style={styles.escalationTitle}>Notification Timeline</Text>
-                 <Text style={styles.escalationItem}>✓ Primary Guardians notified silently</Text>
-                 <Text style={styles.escalationItemPending}>⧗ Escalating to secondary contacts...</Text>
+                 <Text style={styles.escalationItemPending}>⧗ Backend synchronization verified.</Text>
+                 <Text style={styles.escalationItemPending}>⚠️ Note: Backend automatic SMS provider is not configured for this demo. Silent SMS delivery requires backend configuration.</Text>
                </View>
              )}
           </View>
