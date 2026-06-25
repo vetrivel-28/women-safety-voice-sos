@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { EmergencyContact } from '../types';
 import { supabase } from '../lib/supabaseClient';
 
-import { API_BASE_URL } from '../api/client';
+import { apiClient } from '../api/client';
 const STORAGE_KEY = '@safeher_contacts';
 
 interface ContactsContextType {
@@ -60,25 +60,20 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const fetchContacts = async (token: string) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/contacts`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const mappedContacts: EmergencyContact[] = data.map((item: any) => ({
-          id: item.id,
-          name: item.name,
-          phone: item.phone,
-          relationship: item.relationship || 'Emergency Contact',
-          priority: item.priority || 1,
-          createdAt: item.created_at
-        }));
-        const updated = mappedContacts.sort((a, b) => a.priority - b.priority);
-        setContacts(updated);
-        persistContacts(updated);
-      } else {
-        console.error('Failed to fetch contacts from backend');
-      }
+      const response = await apiClient.get('/api/contacts');
+      const data = response.data;
+      const mappedContacts: EmergencyContact[] = data.map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        phone: item.phone,
+        email: item.email,
+        relationship: item.relationship || 'Emergency Contact',
+        priority: item.priority || 1,
+        createdAt: item.created_at
+      }));
+      const updated = mappedContacts.sort((a, b) => a.priority - b.priority);
+      setContacts(updated);
+      persistContacts(updated);
     } catch (e) {
       console.error('Could not fetch contacts', e);
     }
@@ -100,36 +95,27 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const payload = {
         name: contactData.name,
         phone: contactData.phone,
+        email: contactData.email,
         relationship: contactData.relationship,
         priority: priority
       };
-      const response = await fetch(`${API_BASE_URL}/api/contacts`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+      const response = await apiClient.post('/api/contacts', payload);
+      const item = response.data;
       
-      if (response.ok) {
-        const item = await response.json();
-        const newContact: EmergencyContact = {
-          id: item.id,
-          name: item.name,
-          phone: item.phone,
-          relationship: item.relationship || 'Emergency Contact',
-          priority: item.priority || 1,
-          createdAt: item.created_at,
-        };
-        setContacts(prev => {
-          const updated = [...prev, newContact].sort((a, b) => a.priority - b.priority);
-          persistContacts(updated);
-          return updated;
-        });
-      } else {
-        console.error('Backend failed to add contact');
-      }
+      const newContact: EmergencyContact = {
+        id: item.id,
+        name: item.name,
+        phone: item.phone,
+        email: item.email,
+        relationship: item.relationship || 'Emergency Contact',
+        priority: item.priority || 1,
+        createdAt: item.created_at,
+      };
+      setContacts(prev => {
+        const updated = [...prev, newContact].sort((a, b) => a.priority - b.priority);
+        persistContacts(updated);
+        return updated;
+      });
     } catch (e) {
       console.error('Network error adding contact', e);
     }
@@ -138,19 +124,12 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const deleteContact = async (contactId: string) => {
     if (!session) return;
     try {
-      const response = await fetch(`${API_BASE_URL}/api/contacts/${contactId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      await apiClient.delete(`/api/contacts/${contactId}`);
+      setContacts(prev => {
+        const updated = prev.filter(c => c.id !== contactId);
+        persistContacts(updated);
+        return updated;
       });
-      if (response.ok) {
-        setContacts(prev => {
-          const updated = prev.filter(c => c.id !== contactId);
-          persistContacts(updated);
-          return updated;
-        });
-      } else {
-        console.error("Backend failed to delete contact");
-      }
     } catch (e) {
       console.error('Network error deleting contact', e);
     }
@@ -162,27 +141,15 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const payload: any = { ...updates };
       delete payload.id;
       delete payload.createdAt;
-      delete payload.email; // explicitly remove email
       
-      const response = await fetch(`${API_BASE_URL}/api/contacts/${contactId}`, {
-        method: 'PATCH',
-        headers: { 
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
+      const response = await apiClient.patch(`/api/contacts/${contactId}`, payload);
+      const item = response.data;
+      
+      setContacts(prev => {
+        const updated = prev.map(c => c.id === contactId ? { ...c, ...item } : c).sort((a, b) => a.priority - b.priority);
+        persistContacts(updated);
+        return updated;
       });
-      
-      if (response.ok) {
-        const item = await response.json();
-        setContacts(prev => {
-          const updated = prev.map(c => c.id === contactId ? { ...c, ...item } : c).sort((a, b) => a.priority - b.priority);
-          persistContacts(updated);
-          return updated;
-        });
-      } else {
-        console.error("Backend failed to update contact");
-      }
     } catch (e) {
       console.error('Network error updating contact', e);
     }

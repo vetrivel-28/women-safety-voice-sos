@@ -1,7 +1,7 @@
 import React, { createContext, useState, useContext, useEffect, useRef } from 'react';
 import { SOSAlert, TriggerType, AlertStatus } from '../types';
 import { supabase } from '../lib/supabaseClient';
-import { API_BASE_URL } from '../api/client';
+import { apiClient } from '../api/client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 
@@ -85,38 +85,20 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return;
       }
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-      const response = await fetch(`${API_BASE_URL}/api/sos/create`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          trigger_type: alert.triggerType,
-          status: alert.status,
-          cancel_method: alert.cancelMethod || 'NONE',
-          visible_message: alert.visibleMessage,
-          latitude: alert.location?.latitude,
-          longitude: alert.location?.longitude,
-          map_link: alert.location?.mapLink,
-          guardian_name: guardian?.name,
-          guardian_phone: guardian?.phone,
-          guardian_email: guardian?.email
-        }),
-        signal: controller.signal
+      const response = await apiClient.post('/api/sos/create', {
+        trigger_type: alert.triggerType,
+        status: alert.status,
+        cancel_method: alert.cancelMethod || 'NONE',
+        visible_message: alert.visibleMessage,
+        latitude: alert.location?.latitude,
+        longitude: alert.location?.longitude,
+        map_link: alert.location?.mapLink,
+        guardian_name: guardian?.name,
+        guardian_phone: guardian?.phone,
+        guardian_email: guardian?.email
       });
-      clearTimeout(timeoutId);
 
-      if (!response.ok) {
-        const errText = await response.text();
-        updateAlert(alert.id, { syncStatus: 'FAILED_SYNC', lastSyncError: `HTTP ${response.status}` });
-        return;
-      }
-
-      const responseData = await response.json();
+      const responseData = response.data;
       updateAlert(alert.id, { 
         syncStatus: 'SYNCED', 
         backendId: responseData.id,
@@ -180,26 +162,12 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!alert || !alert.backendId) return;
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-
-      const response = await fetch(`${API_BASE_URL}/api/sos/${alert.backendId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          status: status,
-          cancel_method: cancelMethod
-        })
+      await apiClient.patch(`/api/sos/${alert.backendId}`, {
+        status: status,
+        cancel_method: cancelMethod
       });
 
-      if (!response.ok) {
-        updateAlert(alertId, { syncStatus: 'PENDING_SYNC', lastSyncError: 'Backend status update pending' });
-      } else {
-        updateAlert(alertId, { syncStatus: 'SYNCED', lastSyncError: undefined });
-      }
+      updateAlert(alertId, { syncStatus: 'SYNCED', lastSyncError: undefined });
     } catch (err) {
       updateAlert(alertId, { syncStatus: 'PENDING_SYNC', lastSyncError: 'Network error updating status' });
     }

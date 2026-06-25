@@ -50,6 +50,8 @@ def start_journey(journey_in: JourneyCreate, auth_data: dict = Depends(get_curre
             "start_latitude": journey_in.start_latitude,
             "start_longitude": journey_in.start_longitude,
             "start_address": journey_in.start_label,
+            "destination_latitude": journey_in.destination_latitude,
+            "destination_longitude": journey_in.destination_longitude,
             "destination_address": journey_in.destination_label,
             "started_at": datetime.utcnow().isoformat(),
         }

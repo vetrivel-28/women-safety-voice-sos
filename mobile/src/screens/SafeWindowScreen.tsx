@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Alert } from 'react-native';
 import { useSafeWindow } from '../context/SafeWindowContext';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SectionHeader } from '../components/SectionHeader';
@@ -105,8 +105,13 @@ export const SafeWindowScreen: React.FC = () => {
       }
     }
     
-    startSafeWindow(minutes, startLoc, destLoc);
-    setIsStarting(false);
+    try {
+      await startSafeWindow(minutes, startLoc, destLoc);
+    } catch (e: any) {
+      Alert.alert('Journey Failed', e.message || 'Could not start journey. Please try again.');
+    } finally {
+      setIsStarting(false);
+    }
   };
 
   const calculateRiskScore = () => {

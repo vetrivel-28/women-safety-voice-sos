@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { checkIsExempt, requestExemption } from '../modules/BatteryOptimization';
 import { scheduleLocalNotification, cancelLocalNotification } from '../services/notificationService';
 import { supabase } from '../lib/supabaseClient';
-import { API_BASE_URL } from '../api/client';
+import { apiClient } from '../api/client';
 
 interface SafeWindowContextType {
   safeWindow: SafeWindowState;
@@ -96,11 +96,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const restoreJourney = async (session: any) => {
       if (!session) return;
       try {
-        const response = await fetch(`${API_BASE_URL}/api/journeys`, {
-          headers: { 'Authorization': `Bearer ${session.access_token}` }
-        });
-        if (response.ok) {
-          const journeys = await response.json();
+        const response = await apiClient.get('/api/journeys');
+        const journeys = response.data;
           // Find first active journey
           const active = journeys.find((j: any) => j.status === 'active');
           if (active) {
@@ -115,7 +112,6 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             }));
             startBackgroundLocationService();
           }
-        }
       } catch (e) {
         console.warn("Could not restore journeys", e);
       }
@@ -221,21 +217,13 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           check_in_interval_minutes: demoMode ? 0.5 : 5,
           expected_duration_minutes: durationMinutes
         };
-        const response = await fetch(`${API_BASE_URL}/api/journeys`, {
-          method: 'POST',
-          headers: { 
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        });
-        if (response.ok) {
-          const result = await response.json();
-          journeyId = result.id;
-        }
+        const response = await apiClient.post('/api/journeys', payload);
+        journeyId = response.data.id;
       }
-    } catch (e) {
+    } catch (e: any) {
       console.warn("Could not sync journey start to backend", e);
+      const errorMessage = e.customMessage || "Failed to sync journey with server. Please ensure your profile is complete.";
+      throw new Error(errorMessage);
     }
 
     setSafeWindow({
@@ -269,10 +257,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (session) {
-          await fetch(`${API_BASE_URL}/api/journeys/${safeWindow.journeyId}/complete`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${session.access_token}` }
-          });
+          await apiClient.post(`/api/journeys/${safeWindow.journeyId}/complete`);
         }
       } catch (e) {
         console.warn("Could not sync journey complete to backend", e);
@@ -318,9 +303,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           try {
             supabase.auth.getSession().then(({ data: { session } }: any) => {
               if (session) {
-                fetch(`${API_BASE_URL}/api/journeys/${prev.journeyId}/missed-checkin`, {
-                  method: 'POST',
-                  headers: { 'Authorization': `Bearer ${session.access_token}` }
+                apiClient.post(`/api/journeys/${prev.journeyId}/missed-checkin`).catch(err => {
+                  console.warn("Could not sync missed checkin", err);
                 });
               }
             });

@@ -6,7 +6,7 @@ import { SectionHeader } from '../components/SectionHeader';
 import { useContacts } from '../context/ContactsContext';
 
 
-import { API_BASE_URL } from '../api/client';
+import { API_BASE_URL, apiClient } from '../api/client';
 export const SettingsScreen: React.FC = () => {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [session, setSession] = useState<any>(null);
@@ -44,44 +44,18 @@ export const SettingsScreen: React.FC = () => {
     addLog('--- FETCH PROFILE START ---');
 
     try {
-      const { data } = await supabase.auth.getSession();
-      const currentSession = data.session;
-      if (!currentSession?.access_token) {
-        addLog('-> FAILED: No active session found');
-        setIsLoadingProfile(false);
-        return;
-      }
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        addLog('-> TIMEOUT ABORTED (10s)');
-        controller.abort();
-      }, 10000);
-
-      const response = await fetch(`${API_BASE_URL}/api/profile`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${currentSession.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
+      const response = await apiClient.get('/api/profile');
       addLog(`-> GET STATUS: ${response.status}`);
 
-      const text = await response.text();
-      addLog(`-> GET RESPONSE LENGTH: ${text.length}`);
-
-      if (response.ok) {
-        const parsed = JSON.parse(text);
+      const parsed = response.data;
+      if (parsed) {
         setName(parsed.name || '');
         setPhone(parsed.phone || '');
         setBloodGroup(parsed.blood_group || '');
         setMedicalNotes(parsed.medical_notes || '');
       }
     } catch (e: any) {
-      addLog(`-> GET FAILED: ${e.name} - ${e.message}`);
+      addLog(`-> GET FAILED: ${e.message}`);
     } finally {
       setIsLoadingProfile(false);
     }
@@ -92,44 +66,33 @@ export const SettingsScreen: React.FC = () => {
     addLog('--- SAVE PROFILE START ---');
 
     try {
-      const { data } = await supabase.auth.getSession();
-      const currentSession = data.session;
-      if (!currentSession?.access_token) {
-        addLog('-> FAILED: No active session found');
-        Alert.alert('Error', 'No active session found.');
+      // 1. Health check first
+      try {
+        await apiClient.get('/health');
+      } catch (healthError: any) {
+        addLog(`-> HEALTH CHECK FAILED: ${healthError.message}`);
+        Alert.alert(
+          'Cannot reach backend.',
+          healthError.customMessage || `Backend URL: ${API_BASE_URL}\n\nPossible causes:\n• backend not running\n• phone not on same Wi-Fi\n• firewall\n• invalid backend URL`
+        );
         setIsSavingProfile(false);
         return;
       }
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        addLog('-> POST TIMEOUT ABORTED (15s)');
-        controller.abort();
-      }, 15000);
-      console.log('REQUEST URL =', `${API_BASE_URL}/api/profile`);
-      const response = await fetch(`${API_BASE_URL}/api/profile`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${currentSession.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ name, phone, blood_group: bloodGroup, medical_notes: medicalNotes }),
-        signal: controller.signal,
+      // 2. Perform Save
+      const response = await apiClient.patch('/api/profile', {
+        name,
+        phone,
+        blood_group: bloodGroup,
+        medical_notes: medicalNotes
       });
-
-      clearTimeout(timeoutId);
+      
       addLog(`-> POST STATUS: ${response.status}`);
+      Alert.alert('Success', 'Profile updated successfully.');
 
-      const responseText = await response.text();
-
-      if (response.ok) {
-        Alert.alert('Success', 'Profile updated successfully.');
-      } else {
-        Alert.alert('Backend Error', responseText || `HTTP ${response.status}`);
-      }
     } catch (e: any) {
-      addLog(`-> POST FAILED: ${e.name} - ${e.message}`);
-      Alert.alert('Save Failed', e.name === 'AbortError' ? 'Request timed out' : e.message || 'Network error');
+      addLog(`-> POST FAILED: ${e.message}`);
+      Alert.alert('Save Failed', e.customMessage || e.message || 'Network error');
     } finally {
       setIsSavingProfile(false);
     }

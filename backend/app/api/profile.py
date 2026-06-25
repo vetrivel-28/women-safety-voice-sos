@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
-from app.db.client import get_user_supabase_client
+from app.db.client import get_user_supabase_client, get_service_role_client
 from app.api.auth import get_current_user
 from app.schemas.profile import ProfileUpdate, ProfileResponse
 import logging
@@ -16,7 +16,7 @@ router = APIRouter(
 @router.get("", response_model=ProfileResponse)
 async def get_profile(user: dict = Depends(get_current_user)):
     try:
-        supabase = get_user_supabase_client(user["token"])
+        supabase = get_service_role_client()
         user_id = user["user"].id
         
         response = supabase.table("profiles").select("*").eq("id", user_id).execute()
@@ -42,14 +42,13 @@ async def get_profile(user: dict = Depends(get_current_user)):
 @router.patch("", response_model=ProfileResponse)
 async def update_profile(profile_data: ProfileUpdate, user: dict = Depends(get_current_user)):
     try:
-        supabase = get_user_supabase_client(user["token"])
+        supabase = get_service_role_client()
         user_id = user["user"].id
         
         existing = supabase.table("profiles").select("*").eq("id", user_id).execute()
         
-        # Map mobile app 'name' to db 'full_name' and 'user_id' to 'id'
+        # Map mobile app 'name' to db 'full_name'
         update_dict = {
-            "id": user_id,
             "full_name": profile_data.name,
             "phone": profile_data.phone,
             "blood_group": profile_data.blood_group,
@@ -59,7 +58,8 @@ async def update_profile(profile_data: ProfileUpdate, user: dict = Depends(get_c
         if existing.data:
             response = supabase.table("profiles").update(update_dict).eq("id", user_id).execute()
         else:
-            response = supabase.table("profiles").insert(update_dict).execute()
+            insert_dict = {**update_dict, "id": user_id}
+            response = supabase.table("profiles").insert(insert_dict).execute()
             
         if not response.data:
             raise HTTPException(status_code=500, detail="Failed to save profile to database")

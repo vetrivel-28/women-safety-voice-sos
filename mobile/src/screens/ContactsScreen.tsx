@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, SafeAreaView, TextInput, TouchableOpacity, Scro
 import { useContacts } from '../context/ContactsContext';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SectionHeader } from '../components/SectionHeader';
+import { apiClient } from '../api/client';
 
 export const ContactsScreen: React.FC = () => {
   const { getTopFiveContacts, addContact, deleteContact, setPrimaryContact } = useContacts();
@@ -44,22 +45,9 @@ export const ContactsScreen: React.FC = () => {
          return;
       }
 
-      const apiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
-      const response = await fetch(`${apiUrl}/api/guardians/link`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          guardian_email: emailToLink.trim()
-        })
+      await apiClient.post('/api/guardians/link', {
+        guardian_email: emailToLink.trim()
       });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(errText || 'Failed to link guardian');
-      }
 
       Alert.alert('Success', 'Guardian linked successfully!');
       setLinkEmail('');
