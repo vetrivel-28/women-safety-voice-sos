@@ -115,17 +115,20 @@ apiClient.interceptors.response.use(
     }
 
     // Retry logic for transient failures (e.g. Network Error or 5xx)
-    if (!config || !config.retryCount) {
-      if (config) config.retryCount = 0;
-    }
-    
-    const MAX_RETRIES = 2;
-    if (config && config.retryCount < MAX_RETRIES && (error.isNetworkError || (error.response && error.response.status >= 500))) {
-      config.retryCount += 1;
-      console.log(`[API Retry] Retrying request ${config.url} (${config.retryCount}/${MAX_RETRIES})...`);
-      // Wait for a brief delay before retrying
-      await new Promise(resolve => setTimeout(resolve, 1000 * config.retryCount));
-      return apiClient(config);
+    if (config) {
+      const currentRetryStr = config.headers?.['X-Retry-Count'] || '0';
+      const currentRetry = parseInt(currentRetryStr as string, 10);
+      const MAX_RETRIES = 2;
+      
+      if (currentRetry < MAX_RETRIES && (error.isNetworkError || (error.response && error.response.status >= 500))) {
+        const nextRetry = currentRetry + 1;
+        config.headers['X-Retry-Count'] = nextRetry.toString();
+        
+        console.log(`[API Retry] Retrying request ${config.url} (${nextRetry}/${MAX_RETRIES})...`);
+        // Wait for a brief delay before retrying
+        await new Promise(resolve => setTimeout(resolve, 1000 * nextRetry));
+        return apiClient(config);
+      }
     }
 
     return Promise.reject(error);

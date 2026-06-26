@@ -281,7 +281,9 @@ def handle_missed_checkin(journey_id: str, auth_data: dict = Depends(get_current
                 "safe_window_id": journey_id,
                 "status": "ACTIVE",
                 "location_lat": journey.get("start_latitude"),
-                "location_long": journey.get("start_longitude")
+                "location_long": journey.get("start_longitude"),
+                "visible_message": "Journey Mode check-in missed",
+                "cancel_method": "NONE"
             }
             
             sos_res = service_client.table("sos_alerts").insert(sos_data).execute()

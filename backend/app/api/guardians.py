@@ -60,7 +60,7 @@ def get_guardians(auth_data: dict = Depends(get_current_user)):
 
     try:
         # Get links where this user is the user_id (they linked a guardian)
-        result = service_client.table("guardian_links").select("id, status, created_at, profiles!guardian_links_guardian_user_id_fkey(id, full_name, phone, email)").eq("user_id", user.id).execute()
+        result = service_client.table("guardian_links").select("id, status, created_at, profiles!guardian_links_guardian_id_fkey(id, full_name, phone, email)").eq("user_id", user.id).execute()
         
         # Flatten the response to be somewhat compatible
         mapped = []
@@ -263,7 +263,7 @@ def link_guardian(
         link_data = {
             "user_id": user.id,
             "guardian_user_id": guardian_id,
-            "status": "active"
+            "status": "ACTIVE"
         }
 
         result = (

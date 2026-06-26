@@ -11,6 +11,15 @@ Notifications.setNotificationHandler({
   }),
 });
 
+if (Platform.OS === 'android') {
+  Notifications.setNotificationChannelAsync('default', {
+    name: 'default',
+    importance: Notifications.AndroidImportance.MAX,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: '#FF231F7C',
+  });
+}
+
 // NOTE: In Expo SDK 53+, remote push notifications are not supported in Expo Go.
 // This service strictly uses local notifications to avoid the push token error.
 export const requestNotificationPermissions = async () => {

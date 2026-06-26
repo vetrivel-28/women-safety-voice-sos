@@ -242,7 +242,7 @@ export const SafeWindowScreen: React.FC = () => {
                      <Text style={styles.errorText}>You missed your check-in or deviated from your route. An emergency alert has been triggered and the system is attempting to notify your guardians.</Text>
                   </View>
 
-                  <PrimaryButton title="Cancel Alarm & End Journey" variant="outline" onPress={endSafeWindow} style={styles.endBtn} />
+                  <PrimaryButton title="Cancel Alarm & End Journey" variant="outline" onPress={handleEnd} style={styles.endBtn} />
                 </View>
               )}
             </>
