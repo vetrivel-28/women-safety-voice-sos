@@ -462,7 +462,7 @@ Contributions are welcome.
 **Vetrivel A**  
 AI • Data Engineering • Backend Development
 
-**Annie Sherlyn**  
+**Annie Sherlyn R**  
 Frontend • Mobile Application Development
 
 ---
