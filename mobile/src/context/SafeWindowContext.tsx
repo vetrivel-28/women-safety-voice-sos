@@ -6,7 +6,7 @@ import { distanceBetweenPointsMeters, isRouteDeviation } from '../utils/geoUtils
 import { useContacts } from './ContactsContext';
 import { getRoute } from '../services/geocodingService';
 import { startBackgroundLocationService, stopBackgroundLocationService } from '../services/backgroundLocation';
-import { Alert } from 'react-native';
+import { Alert, AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { checkIsExempt, requestExemption } from '../modules/BatteryOptimization';
 import { scheduleLocalNotification, cancelLocalNotification } from '../services/notificationService';
@@ -58,6 +58,11 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const { getPrimaryContact } = useContacts();
   const missedAlertCreated = useRef(false);
   const deviationAlertCreated = useRef(false);
+  const missedTriggeredRef = useRef(false);
+  const completeInFlightRef = useRef(false);
+  const checkInInFlightRef = useRef(false);
+  const startInFlightRef = useRef(false);
+  const restoreInFlightRef = useRef(false);
   const [batteryOptimizationDenied, setBatteryOptimizationDenied] = useState(false);
   const activeNotificationId = useRef<string | null>(null);
 
@@ -73,7 +78,6 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const dueTime = new Date(checkInDueAt).getTime();
     const now = new Date().getTime();
     
-    // In demo mode, warn 5 seconds before. In normal mode, warn 60 seconds before.
     const warningLeadTimeMs = demoMode ? 5000 : 60000;
     const triggerInMs = (dueTime - now) - warningLeadTimeMs;
     
@@ -88,47 +92,88 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   };
 
+  const restoreJourney = async (session: any) => {
+    if (!session || restoreInFlightRef.current) return;
+    restoreInFlightRef.current = true;
+    try {
+      console.log(`[DEBUG] GET /api/journeys executing for user: ${session.user?.id}`);
+      const response = await apiClient.get('/api/journeys');
+      const journeys = response.data;
+      const active = journeys.find((j: any) => j.status === 'active');
+      
+      if (active) {
+        console.log(`[DEBUG] Restoring journey created by user: ${active.user_id}`);
+        // Legacy fallback
+        const now = new Date();
+        const durationSecs = active.duration_seconds || (active.duration_minutes ? active.duration_minutes * 60 : 1800);
+        const startedAt = new Date(active.started_at);
+        const endsAtStr = active.ends_at || new Date(startedAt.getTime() + durationSecs * 1000).toISOString();
+        const intervalMins = active.check_in_interval_minutes || 5;
+        const checkInDueStr = active.check_in_due_at || new Date(startedAt.getTime() + intervalMins * 60000).toISOString();
+        
+        setSafeWindow(prev => ({
+          ...prev,
+          journeyId: active.id,
+          status: 'ACTIVE',
+          durationMinutes: active.duration_minutes || null,
+          startedAt: active.started_at,
+          endsAt: endsAtStr,
+          checkInDueAt: checkInDueStr,
+          lastCheckInAt: active.last_check_in_at || active.started_at,
+          startLocation: active.start_latitude ? { latitude: active.start_latitude, longitude: active.start_longitude } : null,
+        }));
+        
+        missedTriggeredRef.current = false;
+        completeInFlightRef.current = false;
+        startBackgroundLocationService();
+        
+        // Immediately check if already missed while app was closed
+        if (now.getTime() >= new Date(checkInDueStr).getTime()) {
+           markMissedCheckIn(active.id);
+        } else if (now.getTime() >= new Date(endsAtStr).getTime()) {
+           endSafeWindow(active.id);
+        }
+
+      } else if (Array.isArray(journeys)) {
+        setSafeWindow(prev => {
+          if (prev.status === 'ACTIVE' && prev.journeyId) {
+            console.warn(`[DEV WARNING] GET /api/journeys returned no active journey but we thought we had one.`);
+          }
+          return initialState;
+        });
+      }
+    } catch (e: any) {
+      if (e.response && e.response.status === 401) {
+        // Transient 401 -> don't clear state, wait for valid retry
+        console.warn("Transient 401 on restore, preserving current state.");
+      } else {
+        console.warn("Could not restore journeys (request failed/errored), keeping current state", e);
+      }
+    } finally {
+      restoreInFlightRef.current = false;
+    }
+  };
+
   useEffect(() => {
     AsyncStorage.getItem('@battery_prompt_shown').then(status => {
       if (status === 'denied') setBatteryOptimizationDenied(true);
     });
 
-    const restoreJourney = async (session: any) => {
-      if (!session) return;
-      try {
-        const response = await apiClient.get('/api/journeys');
-        const journeys = response.data;
-          // Find first active journey
-          const active = journeys.find((j: any) => j.status === 'active');
-          if (active) {
-            setSafeWindow(prev => ({
-              ...prev,
-              journeyId: active.id,
-              status: 'ACTIVE',
-              durationMinutes: active.duration_minutes || null,
-              startedAt: active.started_at,
-              startLocation: active.start_latitude ? { latitude: active.start_latitude, longitude: active.start_longitude } : null,
-              // Other fields might need restoring but we just sync the basic active state for now
-            }));
-            startBackgroundLocationService();
-          }
-      } catch (e) {
-        console.warn("Could not restore journeys", e);
-      }
-    };
-
     supabase.auth.getSession().then(({ data: { session } }) => {
       restoreJourney(session);
     });
     
-    supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
       restoreJourney(session);
     });
+    
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   const openBatterySettings = async () => {
     await requestExemption();
-    // Optimistically assume they changed it, or at least re-evaluate next time
     await AsyncStorage.removeItem('@battery_prompt_shown');
     setBatteryOptimizationDenied(false);
   };
@@ -143,21 +188,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             'Background Reliability',
             'For your safety, SafeHer needs permission to ignore battery optimizations so we can track your journey even when the screen is off.',
             [
-              {
-                text: 'Not Now',
-                style: 'cancel',
-                onPress: () => {
-                   AsyncStorage.setItem('@battery_prompt_shown', 'denied');
-                   setBatteryOptimizationDenied(true);
-                }
-              },
-              {
-                text: 'Allow',
-                onPress: async () => {
-                   await AsyncStorage.setItem('@battery_prompt_shown', 'granted');
-                   await requestExemption();
-                }
-              }
+              { text: 'Not Now', style: 'cancel', onPress: () => { AsyncStorage.setItem('@battery_prompt_shown', 'denied'); setBatteryOptimizationDenied(true); } },
+              { text: 'Allow', onPress: async () => { await AsyncStorage.setItem('@battery_prompt_shown', 'granted'); await requestExemption(); } }
             ]
           );
         }
@@ -167,21 +199,18 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   };
 
-  const startSafeWindow = async (
-    durationMinutes: SafeWindowDuration,
-    startLoc?: {latitude: number, longitude: number},
-    destLoc?: {latitude: number, longitude: number}
-  ) => {
+  const startSafeWindow = async (durationMinutes: SafeWindowDuration, startLoc?: {latitude: number, longitude: number}, destLoc?: {latitude: number, longitude: number}) => {
+    if (startInFlightRef.current || completeInFlightRef.current || safeWindow.status === 'ACTIVE') {
+      throw new Error("Action currently in flight or another journey is already active.");
+    }
+    startInFlightRef.current = true;
     missedAlertCreated.current = false;
     deviationAlertCreated.current = false;
+    missedTriggeredRef.current = false;
+    completeInFlightRef.current = false;
+    
     const now = new Date();
     const demoMode = durationMinutes === 0.5;
-    const durationMs = durationMinutes * 60 * 1000;
-    const endsAt = new Date(now.getTime() + durationMs);
-    
-    // checkInDueAt: demo mode 30 seconds, normal mode 5 minutes
-    const checkInDueMs = demoMode ? 30 * 1000 : 5 * 60 * 1000;
-    const checkInDueAt = new Date(now.getTime() + checkInDueMs).toISOString();
 
     let actualStartLoc = startLoc;
     if (!actualStartLoc) {
@@ -190,9 +219,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (loc && !loc.permissionDenied) {
           actualStartLoc = { latitude: loc.latitude, longitude: loc.longitude };
         }
-      } catch (e) {
-        console.warn("Failed to get current location", e);
-      }
+      } catch (e) { console.warn("Failed to get current location", e); }
     }
 
     let initialRoute: {lat: number, lon: number}[] = [];
@@ -202,38 +229,87 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       else initialRoute = [{lat: actualStartLoc.latitude, lon: actualStartLoc.longitude}, {lat: destLoc.latitude, lon: destLoc.longitude}];
     }
 
-    let journeyId: string | undefined;
+    let journeyData: any;
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        const payload = {
-          journey_name: "Safe Journey",
-          start_label: "Current Location",
-          start_latitude: actualStartLoc?.latitude || null,
-          start_longitude: actualStartLoc?.longitude || null,
-          destination_label: "Destination",
-          destination_latitude: destLoc?.latitude || null,
-          destination_longitude: destLoc?.longitude || null,
-          check_in_interval_minutes: demoMode ? 0.5 : 5,
-          expected_duration_minutes: durationMinutes
-        };
-        const response = await apiClient.post('/api/journeys', payload);
-        journeyId = response.data.id;
-      }
+      if (!session) throw { response: { status: 401 } };
+      
+      const payload = {
+        journey_name: "Safe Journey",
+        start_label: "Current Location",
+        ...(actualStartLoc && { start_latitude: actualStartLoc.latitude, start_longitude: actualStartLoc.longitude }),
+        ...(destLoc ? { destination_label: "Destination", destination_latitude: destLoc.latitude, destination_longitude: destLoc.longitude } : {}),
+        ...(demoMode ? {
+           duration_seconds: 30,
+           duration_minutes: 1,
+           check_in_interval_seconds: 30,
+           check_in_interval_minutes: 1,
+           expected_duration_minutes: 1,
+           demo_mode: true
+        } : {
+           duration_seconds: durationMinutes * 60,
+           duration_minutes: durationMinutes,
+           check_in_interval_minutes: 5,
+           expected_duration_minutes: durationMinutes
+        })
+      };
+      
+      console.log(`[DEBUG] POST /api/journeys executing for user: ${session.user?.id}`);
+      const response = await apiClient.post('/api/journeys', payload);
+      journeyData = response.data;
+      console.log(`[DEBUG] POST /api/journeys returned journeyId: ${journeyData.id} assigned to user: ${journeyData.user_id}`);
     } catch (e: any) {
+      startInFlightRef.current = false;
       console.warn("Could not sync journey start to backend", e);
-      const errorMessage = e.customMessage || "Failed to sync journey with server. Please ensure your profile is complete.";
-      throw new Error(errorMessage);
+      let errorMessage = "Could not start Safe Window. Please try again.";
+      
+      if (e.response) {
+         if (e.response.status === 401) errorMessage = "Session expired. Please login again.";
+         else if (e.response.status === 400 || e.response.status === 422) errorMessage = "Invalid journey duration. Please try again.";
+         else if (e.response.status === 409) {
+             errorMessage = e.response.data?.detail || e.response.data?.message || "You already have an active safe window. End it before starting another.";
+             try {
+                const getResp = await apiClient.get('/api/journeys');
+                const active = getResp.data.find((j: any) => j.status === 'active');
+                if (active) {
+                    journeyData = active;
+                } else {
+                    throw new Error(errorMessage);
+                }
+             } catch (retryErr) {
+                throw new Error(errorMessage);
+             }
+         }
+      } else if (e.message?.includes('Network Error') || e.message?.includes('timeout') || e.message?.includes('Network request failed')) {
+         errorMessage = "Could not reach backend. Check Wi-Fi/backend.";
+         try {
+             // In case it was a timeout but succeeded on backend
+             const getResp = await apiClient.get('/api/journeys');
+             const active = getResp.data.find((j: any) => j.status === 'active');
+             if (active) {
+                 journeyData = active;
+             } else {
+                 throw new Error(errorMessage);
+             }
+         } catch (retryErr) {
+             throw new Error(errorMessage);
+         }
+      } else {
+         throw new Error(errorMessage);
+      }
+      
+      if (!journeyData) throw new Error(errorMessage);
     }
+    startInFlightRef.current = false;
 
     setSafeWindow({
-      journeyId,
+      journeyId: journeyData.id,
       status: 'ACTIVE',
       durationMinutes,
-      startedAt: now.toISOString(),
-      endsAt: endsAt.toISOString(),
-      checkInDueAt,
-      lastCheckInAt: null,
+      startedAt: journeyData.started_at,
+      endsAt: journeyData.ends_at,
+      checkInDueAt: journeyData.check_in_due_at,
+      lastCheckInAt: journeyData.last_check_in_at,
       demoMode,
       missedCheckInAt: null,
       startLocation: actualStartLoc || null,
@@ -244,102 +320,111 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     });
     setDistanceToDestination(null);
 
-    // Start background polling service
     startBackgroundLocationService();
-    scheduleNextNotification(checkInDueAt, demoMode);
+    scheduleNextNotification(journeyData.check_in_due_at, demoMode);
   };
 
-  const endSafeWindow = async () => {
+  const endSafeWindow = async (forceId?: string) => {
+    if (completeInFlightRef.current) return;
+    completeInFlightRef.current = true;
+    
     clearExistingNotification();
     
-    // Sync with backend
-    if (safeWindow.journeyId) {
+    const targetId = forceId || safeWindow.journeyId;
+    if (targetId) {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (session) {
-          await apiClient.post(`/api/journeys/${safeWindow.journeyId}/complete`);
+          const res = await apiClient.post(`/api/journeys/${targetId}/complete`);
         }
       } catch (e) {
         console.warn("Could not sync journey complete to backend", e);
       }
     }
-
-    setSafeWindow(prev => ({
-      ...prev,
-      status: 'COMPLETED',
-    }));
+    setSafeWindow(initialState);
     stopBackgroundLocationService();
+    completeInFlightRef.current = false;
   };
 
   const markCheckInSafe = async () => {
-    const now = new Date();
-    setSafeWindow(prev => {
-      if (prev.status !== 'ACTIVE') return prev;
-      
-      const checkInDueMs = prev.demoMode ? 30 * 1000 : 5 * 60 * 1000;
-      const nextDueAt = new Date(now.getTime() + checkInDueMs).toISOString();
-      
-      scheduleNextNotification(nextDueAt, prev.demoMode || false);
-
-      return {
-        ...prev,
-        lastCheckInAt: now.toISOString(),
-        checkInDueAt: nextDueAt,
-        routeDeviationDetected: false, // Reset deviation on manual check-in
-      };
-    });
-  };
-
-  const markMissedCheckIn = async () => {
-    setSafeWindow(prev => {
-      if (prev.status === 'MISSED_CHECKIN') return prev;
-      
-      if (!missedAlertCreated.current) {
-        missedAlertCreated.current = true;
-        clearExistingNotification();
-        
-        // Sync with backend to actually trigger SMS
-        if (prev.journeyId) {
-          try {
-            supabase.auth.getSession().then(({ data: { session } }: any) => {
-              if (session) {
-                apiClient.post(`/api/journeys/${prev.journeyId}/missed-checkin`).catch(err => {
-                  console.warn("Could not sync missed checkin", err);
-                });
-              }
-            });
-          } catch (e) {
-            console.warn("Could not sync missed checkin to backend", e);
-          }
+    if (checkInInFlightRef.current || safeWindow.status !== 'ACTIVE') return;
+    checkInInFlightRef.current = true;
+    
+    try {
+      if (safeWindow.journeyId) {
+        const res = await apiClient.post(`/api/journeys/${safeWindow.journeyId}/check-in`);
+        const journey = res.data;
+        if (journey.status === 'completed' || journey.status === 'missed') {
+            setSafeWindow(prev => ({ ...prev, status: journey.status === 'completed' ? 'COMPLETED' : 'MISSED_CHECKIN' }));
+            return;
         }
-        
-        const isJourney = prev.startLocation && prev.destinationLocation;
-        const triggerType = isJourney ? 'JOURNEY_MISSED_CHECKIN' : 'DEAD_MAN_MISSED';
-        const primary = getPrimaryContact();
-        
-        getCurrentLocationForAlert().then(locationData => {
-          createAlert({
-            triggerType,
-            status: 'ACTIVE',
-            visibleMessage: isJourney ? 'Journey Mode check-in missed' : 'Check-In Timer expired',
-            cancelMethod: 'NONE',
-            location: locationData && !locationData.permissionDenied ? locationData : undefined,
-            guardian_name: primary?.name,
-            guardian_phone: primary?.phone,
-            guardian_email: primary?.email
-          } as any);
-        }).catch(() => {
-          createAlert({
-            triggerType,
-            status: 'ACTIVE',
-            visibleMessage: isJourney ? 'Journey Mode check-in missed' : 'Check-In Timer expired',
-            cancelMethod: 'NONE',
-            guardian_name: primary?.name,
-            guardian_phone: primary?.phone,
-            guardian_email: primary?.email
-          } as any);
+        setSafeWindow(prev => {
+          if (prev.status !== 'ACTIVE') return prev;
+          scheduleNextNotification(journey.check_in_due_at, prev.demoMode || false);
+          return {
+            ...prev,
+            lastCheckInAt: journey.last_check_in_at,
+            checkInDueAt: journey.check_in_due_at,
+            routeDeviationDetected: false,
+          };
         });
       }
+    } catch (e: any) {
+      console.warn("Could not check in", e);
+      if (e.response && (e.response.status === 404 || e.response.status === 409)) {
+          setSafeWindow(prev => ({ ...prev, status: 'COMPLETED' }));
+      }
+    } finally {
+      checkInInFlightRef.current = false;
+    }
+  };
+
+  const markMissedCheckIn = async (forceId?: string) => {
+    if (missedTriggeredRef.current) return;
+    missedTriggeredRef.current = true;
+    
+    clearExistingNotification();
+    
+    const targetId = forceId || safeWindow.journeyId;
+    if (targetId) {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          await apiClient.post(`/api/journeys/${targetId}/missed-checkin`);
+        }
+      } catch (e) {
+        console.warn("Could not sync missed checkin to backend", e);
+      }
+    }
+    
+    setSafeWindow(prev => {
+      const isJourney = prev.startLocation && prev.destinationLocation;
+      const triggerType = isJourney ? 'JOURNEY_MISSED_CHECKIN' : 'DEAD_MAN_MISSED';
+      const primary = getPrimaryContact();
+      
+      getCurrentLocationForAlert().then(locationData => {
+        createAlert({
+          triggerType,
+          status: 'ACTIVE',
+          visibleMessage: isJourney ? 'Journey Mode check-in missed' : 'Check-In Timer expired',
+          cancelMethod: 'NONE',
+          location: locationData && !locationData.permissionDenied ? locationData : undefined,
+          guardian_name: primary?.name,
+          guardian_phone: primary?.phone,
+          guardian_email: primary?.email
+        } as any);
+      }).catch(() => {
+        createAlert({
+          triggerType,
+          status: 'ACTIVE',
+          visibleMessage: isJourney ? 'Journey Mode check-in missed' : 'Check-In Timer expired',
+          cancelMethod: 'NONE',
+          guardian_name: primary?.name,
+          guardian_phone: primary?.phone,
+          guardian_email: primary?.email
+        } as any);
+      });
+      
       stopBackgroundLocationService();
       return {
         ...prev,
@@ -379,69 +464,88 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   };
 
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let timerInterval: NodeJS.Timeout;
+    let locationInterval: NodeJS.Timeout;
+    
+    const checkTimers = () => {
+      if (safeWindow.status !== 'ACTIVE') return;
+      const now = new Date().getTime();
+      
+      // Missed check-in
+      if (safeWindow.checkInDueAt && now >= new Date(safeWindow.checkInDueAt).getTime()) {
+        markMissedCheckIn();
+      } else if (safeWindow.endsAt && now >= new Date(safeWindow.endsAt).getTime()) {
+        endSafeWindow();
+      }
+    };
+
+    const checkLocation = () => {
+      if (safeWindow.status !== 'ACTIVE') return;
+      const now = new Date().getTime();
+      
+      if (safeWindow.routePoints && safeWindow.routePoints.length > 2 && safeWindow.destinationLocation && !safeWindow.routeDeviationDetected && !safeWindow.demoMode) {
+        getCurrentLocationForAlert().then(loc => {
+          if (loc && !loc.permissionDenied) {
+            const currentLoc = { lat: loc.latitude, lon: loc.longitude };
+            const destLoc = { lat: safeWindow.destinationLocation!.latitude, lon: safeWindow.destinationLocation!.longitude };
+            
+            const distToDest = distanceBetweenPointsMeters(currentLoc.lat, currentLoc.lon, destLoc.lat, destLoc.lon);
+            if (distToDest < 100000) { // arbitrary sanity check to hide 496km bugs
+               setDistanceToDestination(distToDest);
+            } else {
+               setDistanceToDestination(null);
+            }
+
+            if (isRouteDeviation(currentLoc, safeWindow.routePoints!, 300)) {
+              setSafeWindow(prev => {
+                if (prev.routeDeviationDetected) return prev;
+                if (!prev.routeDeviationWarningAt) {
+                  const promptTime = new Date(now + 60 * 1000).toISOString();
+                  scheduleNextNotification(promptTime, prev.demoMode || false);
+                  return { ...prev, routeDeviationWarningAt: new Date().toISOString(), checkInDueAt: promptTime };
+                }
+                
+                const warningTime = new Date(prev.routeDeviationWarningAt).getTime();
+                if (now - warningTime >= 60000) {
+                  return { ...prev, routeDeviationDetected: true };
+                }
+                return prev;
+              });
+            } else {
+              setSafeWindow(prev => {
+                if (prev.routeDeviationWarningAt && !prev.routeDeviationDetected) {
+                  return { ...prev, routeDeviationWarningAt: null };
+                }
+                return prev;
+              });
+            }
+          }
+        }).catch(err => {
+           if (__DEV__) console.log("SafeWindow location check failed", err);
+        });
+      } else {
+         // If demo mode or no real route, ensure distance is null
+         setDistanceToDestination(null);
+      }
+    };
     
     if (safeWindow.status === 'ACTIVE') {
-      interval = setInterval(() => {
-        const now = new Date().getTime();
-        
-        // Missed check-in
-        if (safeWindow.checkInDueAt && now >= new Date(safeWindow.checkInDueAt).getTime()) {
-          markMissedCheckIn();
-        } else if (safeWindow.endsAt && now >= new Date(safeWindow.endsAt).getTime()) {
-          // Check if window ended gracefully without missing check-ins
-          endSafeWindow();
-        }
-
-        // Route monitoring
-        if (safeWindow.routePoints && safeWindow.routePoints.length > 0 && safeWindow.destinationLocation && !safeWindow.routeDeviationDetected) {
-          getCurrentLocationForAlert().then(loc => {
-            if (loc && !loc.permissionDenied) {
-              const currentLoc = { lat: loc.latitude, lon: loc.longitude };
-              const destLoc = { lat: safeWindow.destinationLocation!.latitude, lon: safeWindow.destinationLocation!.longitude };
-              
-              const distToDest = distanceBetweenPointsMeters(currentLoc.lat, currentLoc.lon, destLoc.lat, destLoc.lon);
-              setDistanceToDestination(distToDest);
-
-              if (isRouteDeviation(currentLoc, safeWindow.routePoints!, 300)) {
-                setSafeWindow(prev => {
-                  if (prev.routeDeviationDetected) return prev;
-                  if (!prev.routeDeviationWarningAt) {
-                    // Start 60s grace period and schedule notification
-                    const promptTime = new Date(now + 60 * 1000).toISOString();
-                    scheduleNextNotification(promptTime, prev.demoMode || false);
-                    return { ...prev, routeDeviationWarningAt: new Date().toISOString(), checkInDueAt: promptTime };
-                  }
-                  
-                  // If warning started, check if 60s elapsed
-                  const warningTime = new Date(prev.routeDeviationWarningAt).getTime();
-                  if (now - warningTime >= 60000) {
-                    // Time elapsed, it will be caught by the missed check-in logic
-                    return { ...prev, routeDeviationDetected: true };
-                  }
-                  return prev;
-                });
-              } else {
-                // Not deviated, clear warning if present
-                setSafeWindow(prev => {
-                  if (prev.routeDeviationWarningAt && !prev.routeDeviationDetected) {
-                    return { ...prev, routeDeviationWarningAt: null };
-                  }
-                  return prev;
-                });
-              }
-            }
-          }).catch(err => {
-             if (__DEV__) console.log("SafeWindow location check failed", err);
-          });
-        }
-      }, 5000);
+      timerInterval = setInterval(checkTimers, 1000);
+      locationInterval = setInterval(checkLocation, 5000);
     }
+    
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active' && safeWindow.status === 'ACTIVE') {
+         checkTimers();
+      }
+    });
 
     return () => {
-      if (interval) clearInterval(interval);
+      if (timerInterval) clearInterval(timerInterval);
+      if (locationInterval) clearInterval(locationInterval);
+      subscription.remove();
     };
-  }, [safeWindow.status, safeWindow.endsAt, safeWindow.checkInDueAt, safeWindow.routePoints, safeWindow.routeDeviationDetected, safeWindow.routeDeviationWarningAt]);
+  }, [safeWindow.status, safeWindow.endsAt, safeWindow.checkInDueAt, safeWindow.routePoints, safeWindow.routeDeviationDetected, safeWindow.routeDeviationWarningAt, safeWindow.demoMode]);
 
   const getRemainingSeconds = () => {
     if (safeWindow.status === 'INACTIVE' || safeWindow.status === 'COMPLETED' || safeWindow.status === 'MISSED_CHECKIN') return 0;

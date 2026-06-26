@@ -27,7 +27,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
             logger.warning("No user found in token")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials",
+                detail="Session expired. Please login again.",
             )
 
         logger.info(f"JWT validated for user: {response.user.id}")
@@ -39,8 +39,16 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[-] Authentication exception when calling Supabase: {type(e).__name__} - {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Authentication failed. Supabase Error: {str(e)}",
-        )
+        err_msg = str(e).lower()
+        if "timeout" in err_msg:
+            logger.error("Authentication timeout")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service timeout. Please try again.",
+            )
+        else:
+            logger.error("Authentication exception", exc_info=False)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired. Please login again.",
+            )

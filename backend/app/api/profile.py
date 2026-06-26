@@ -28,6 +28,9 @@ async def get_profile(user: dict = Depends(get_current_user)):
         # Map db 'id' -> 'user_id' and 'full_name' -> 'name'
         return ProfileResponse(
             user_id=data.get("id", user_id),
+            email=data.get("email", ""),
+            full_name=data.get("full_name", ""),
+            guardian_code=data.get("guardian_code", ""),
             name=data.get("full_name", ""),
             phone=data.get("phone", ""),
             blood_group=data.get("blood_group", ""),
@@ -67,6 +70,9 @@ async def update_profile(profile_data: ProfileUpdate, user: dict = Depends(get_c
         data = response.data[0]
         return ProfileResponse(
             user_id=data.get("id", user_id),
+            email=data.get("email", ""),
+            full_name=data.get("full_name", ""),
+            guardian_code=data.get("guardian_code", ""),
             name=data.get("full_name", ""),
             phone=data.get("phone", ""),
             blood_group=data.get("blood_group", ""),

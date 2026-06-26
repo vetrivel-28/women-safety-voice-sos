@@ -22,6 +22,7 @@ export const SafeWindowScreen: React.FC = () => {
   
   const [isStarting, setIsStarting] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const searchTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -90,10 +91,13 @@ export const SafeWindowScreen: React.FC = () => {
 
   const handleStart = async (minutes: 15|30|60|0.5) => {
     setIsStarting(true);
+    setErrorBanner(null);
     let startLoc, destLoc;
     const locData = await getCurrentLocationForAlert();
     if (locData && !locData.permissionDenied) {
       startLoc = { latitude: locData.latitude, longitude: locData.longitude };
+    } else {
+      Alert.alert('Location Warning', 'Location permission denied. Journey can start but exact start location is unavailable.');
     }
     
     if (selectedPlace) {
@@ -108,10 +112,25 @@ export const SafeWindowScreen: React.FC = () => {
     try {
       await startSafeWindow(minutes, startLoc, destLoc);
     } catch (e: any) {
-      Alert.alert('Journey Failed', e.message || 'Could not start journey. Please try again.');
+      setErrorBanner(e.message || 'Could not start journey. Please try again.');
     } finally {
       setIsStarting(false);
     }
+  };
+
+  const [isCompleting, setIsCompleting] = useState(false);
+  const [isCheckingIn, setIsCheckingIn] = useState(false);
+
+  const handleCheckIn = async () => {
+    setIsCheckingIn(true);
+    await markCheckInSafe();
+    setIsCheckingIn(false);
+  };
+
+  const handleEnd = async () => {
+    setIsCompleting(true);
+    await endSafeWindow();
+    setIsCompleting(false);
   };
 
   const calculateRiskScore = () => {
@@ -160,7 +179,7 @@ export const SafeWindowScreen: React.FC = () => {
                     <Text style={styles.checkInCountdown}>{formatTime(checkInTimeLeft)}</Text>
                   </View>
                   
-                  <PrimaryButton title="I'm Safe (Check-in)" variant="primary" onPress={markCheckInSafe} style={{width: '100%', marginBottom: 16}} />
+                  <PrimaryButton title={isCheckingIn ? "Checking in..." : "I'm Safe (Check-in)"} variant="primary" onPress={handleCheckIn} disabled={isCheckingIn} style={{width: '100%', marginBottom: 16}} />
 
                   <View style={styles.riskCard}>
                      <View style={styles.riskHeader}>
@@ -179,7 +198,12 @@ export const SafeWindowScreen: React.FC = () => {
                           <Text style={styles.routeIcon}>📍</Text>
                           <Text style={styles.routeTitle}>Route Tracking Active</Text>
                        </View>
-                       <Text style={styles.routeText}>Distance to destination: <Text style={{fontWeight: 'bold'}}>{formatDistance(distanceToDestination)}</Text></Text>
+                       
+                       {distanceToDestination !== null && distanceToDestination !== undefined ? (
+                           <Text style={styles.routeText}>Distance to destination: <Text style={{fontWeight: 'bold'}}>{formatDistance(distanceToDestination)}</Text></Text>
+                       ) : (
+                           <Text style={styles.routeText}>Route tracking unavailable for this journey</Text>
+                       )}
                        
                        {safeWindow.routeDeviationWarningAt && !safeWindow.routeDeviationDetected && (
                          <View style={styles.warningBox}>
@@ -208,7 +232,7 @@ export const SafeWindowScreen: React.FC = () => {
                     </View>
                   )}
 
-                  <PrimaryButton title="End Journey" variant="outline" onPress={endSafeWindow} style={styles.endBtn} />
+                  <PrimaryButton title={isCompleting ? "Ending..." : "End Journey"} variant="outline" onPress={handleEnd} disabled={isCompleting} style={styles.endBtn} />
                 </View>
               ) : (
                 <View style={styles.activeSection}>
@@ -224,6 +248,12 @@ export const SafeWindowScreen: React.FC = () => {
             </>
           ) : (
             <View style={styles.optionsSection}>
+              {errorBanner && (
+                <View style={styles.errorBannerCard}>
+                  <Text style={styles.errorBannerIcon}>❌</Text>
+                  <Text style={styles.errorBannerText}>{errorBanner}</Text>
+                </View>
+              )}
               <View style={styles.card}>
                 <SectionHeader title="Route Setup" subtitle="Let SafeHer monitor your journey." />
                 
@@ -384,6 +414,9 @@ const styles = StyleSheet.create({
   selectedPlaceName: { fontSize: 16, fontWeight: '800', color: '#3730A3' },
   selectedPlaceDesc: { fontSize: 14, color: '#4F46E5', marginTop: 4 },
   clearBtn: { backgroundColor: '#FFFFFF', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#C7D2FE' },
-  clearText: { color: '#4F46E5', fontWeight: '800', fontSize: 12, textTransform: 'uppercase' }
+  clearText: { color: '#4F46E5', fontWeight: '800', fontSize: 12, textTransform: 'uppercase' },
+  errorBannerCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF2F2', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', marginBottom: 16 },
+  errorBannerIcon: { fontSize: 20, marginRight: 12 },
+  errorBannerText: { fontSize: 14, color: '#991B1B', flex: 1, fontWeight: '600' }
 });
 

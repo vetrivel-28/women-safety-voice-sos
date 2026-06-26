@@ -15,6 +15,9 @@ class ProfileUpdate(ProfileBase):
 
 class ProfileResponse(ProfileBase):
     user_id: str
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    guardian_code: Optional[str] = None
 
     class Config:
         from_attributes = True

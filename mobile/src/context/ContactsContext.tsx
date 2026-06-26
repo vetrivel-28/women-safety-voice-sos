@@ -58,9 +58,11 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const fetchContacts = async (token: string) => {
+  const fetchContacts = async (token: string, isRetry = false) => {
     try {
-      const response = await apiClient.get('/api/contacts');
+      const response = await apiClient.get('/api/contacts', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       const data = response.data;
       const mappedContacts: EmergencyContact[] = data.map((item: any) => ({
         id: item.id,
@@ -74,8 +76,19 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const updated = mappedContacts.sort((a, b) => a.priority - b.priority);
       setContacts(updated);
       persistContacts(updated);
-    } catch (e) {
-      console.error('Could not fetch contacts', e);
+    } catch (e: any) {
+      if (e.response && e.response.status === 401 && !isRetry) {
+        console.warn('Session expired, attempting to refresh token before giving up...');
+        const { data: { session: newSession } } = await supabase.auth.getSession();
+        if (newSession && newSession.access_token) {
+          setSession(newSession);
+          fetchContacts(newSession.access_token, true);
+        } else {
+          console.error('Session refresh failed', e.response.data);
+        }
+      } else {
+        console.error('Could not fetch contacts', { url: e.config?.url, status: e.response?.status, data: e.response?.data });
+      }
     }
   };
 

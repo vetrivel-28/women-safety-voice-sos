@@ -30,6 +30,10 @@ const options = {
 
 export const startBackgroundLocationService = async () => {
     try {
+        if (!BackgroundService || typeof BackgroundService.start !== 'function') {
+            console.log("Background service unavailable in Expo Go; using foreground timer.");
+            return;
+        }
         if (!BackgroundService.isRunning()) {
             await BackgroundService.start(backgroundTask, options);
         }
@@ -40,6 +44,9 @@ export const startBackgroundLocationService = async () => {
 
 export const stopBackgroundLocationService = async () => {
     try {
+        if (!BackgroundService || typeof BackgroundService.stop !== 'function') {
+            return;
+        }
         if (BackgroundService.isRunning()) {
             await BackgroundService.stop();
         }

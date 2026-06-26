@@ -34,6 +34,16 @@ export const apiClient = axios.create({
   },
 });
 
+// Helper to sanitize logs to prevent JWT leaks
+const sanitizeForLog = (headers: any) => {
+  if (!headers) return headers;
+  const sanitized = { ...headers };
+  if (sanitized.Authorization) {
+    sanitized.Authorization = 'Bearer <redacted>';
+  }
+  return sanitized;
+};
+
 // Request Interceptor: Attach JWT and Log
 apiClient.interceptors.request.use(
   async (config) => {
@@ -53,7 +63,7 @@ apiClient.interceptors.request.use(
     console.log(`[API Request Start] ${config.method?.toUpperCase()} ${config.url}`);
     console.log(`[API Request Details]`, {
       baseURL: config.baseURL,
-      headers: config.headers,
+      headers: sanitizeForLog(config.headers),
       jwtPresent: hasJwt,
       payload: config.data,
       time: new Date().toISOString()

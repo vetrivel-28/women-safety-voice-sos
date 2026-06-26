@@ -35,6 +35,8 @@ def create_sos_alert(alert_in: AlertCreate, auth_data: dict = Depends(get_curren
         norm_trigger = 'SILENT_SOS'
     elif raw_trigger in ['JOURNEY_MISSED_CHECKIN', 'SAFE_WINDOW_MISSED_CHECKIN', 'JOURNEY_MISSED']:
         norm_trigger = 'JOURNEY_MISSED_CHECKIN'
+    elif raw_trigger in ['DEAD_MAN', 'DEAD_MAN_MISSED', 'DEAD_MAN_CHECKIN_MISSED']:
+        norm_trigger = 'DEAD_MAN_MISSED'
 
     alert_data = {
         "user_id": user.id,

@@ -2,12 +2,15 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 
 class GuardianLinkRequest(BaseModel):
-    guardian_email: EmailStr
+    guardian_email: Optional[EmailStr] = None
+    guardian_code: Optional[str] = None
+    guardian_user_id: Optional[str] = None
 
 class GuardianLinkResponse(BaseModel):
     id: str
     user_id: str
-    guardian_id: str
+    guardian_user_id: Optional[str] = None
+    guardian_id: Optional[str] = None
     status: str
     created_at: str
 

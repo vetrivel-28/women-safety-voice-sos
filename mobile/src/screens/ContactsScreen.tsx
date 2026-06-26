@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useContacts } from '../context/ContactsContext';
 import { PrimaryButton } from '../components/PrimaryButton';
@@ -35,8 +35,31 @@ export const ContactsScreen: React.FC = () => {
     handleClearForm();
   };
 
-  const handleLinkGuardian = async (emailToLink: string) => {
-    if (!emailToLink.trim()) return;
+  const [myGuardianCode, setMyGuardianCode] = useState('');
+  const [myGuardians, setMyGuardians] = useState<any[]>([]);
+  const [watching, setWatching] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetchGuardianData();
+  }, []);
+
+  const fetchGuardianData = async () => {
+    try {
+      const codeRes = await apiClient.get('/api/guardians/me/code');
+      setMyGuardianCode(codeRes.data.guardian_code);
+
+      const guardiansRes = await apiClient.get('/api/guardians');
+      setMyGuardians(guardiansRes.data);
+
+      const watchingRes = await apiClient.get('/api/guardians/watching');
+      setWatching(watchingRes.data);
+    } catch (e) {
+      console.warn("Failed to fetch guardian data", e);
+    }
+  };
+
+  const handleLinkGuardian = async (inputValue: string) => {
+    if (!inputValue.trim()) return;
     setIsLinking(true);
     try {
       const { data: { session } } = await import('../lib/supabaseClient').then(m => m.supabase.auth.getSession());
@@ -45,14 +68,31 @@ export const ContactsScreen: React.FC = () => {
          return;
       }
 
-      await apiClient.post('/api/guardians/link', {
-        guardian_email: emailToLink.trim()
-      });
+      let payload: any = {};
+      const val = inputValue.trim();
+      if (val.startsWith('SH-')) {
+        payload = { guardian_code: val };
+      } else if (val.includes('@')) {
+        payload = { guardian_email: val };
+      } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)) {
+        payload = { guardian_user_id: val };
+      } else {
+        Alert.alert('Validation Error', 'Input must be a valid SH- code, email, or User ID.');
+        setIsLinking(false);
+        return;
+      }
 
-      Alert.alert('Success', 'Guardian linked successfully!');
+      const response = await apiClient.post('/api/guardians/link', payload);
+
+      if (response.data?.message === "Already linked") {
+        Alert.alert('Info', 'Already linked to this guardian.');
+      } else {
+        Alert.alert('Success', 'Guardian linked successfully!');
+      }
       setLinkEmail('');
+      fetchGuardianData();
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      Alert.alert('Error', e.response?.data?.detail || e.message);
     } finally {
       setIsLinking(false);
     }
@@ -164,28 +204,56 @@ export const ContactsScreen: React.FC = () => {
             </View>
           </View>
 
-          <SectionHeader title="Link Guardian Account" subtitle="Allow someone to monitor your live alerts remotely." />
+          <SectionHeader title="My Guardian Code" subtitle="Share this code with another SafeHer user so they can add you as their guardian." />
           <View style={styles.formCard}>
-            <Text style={styles.inputLabel}>Guardian Email *</Text>
+            <Text style={styles.codeText}>{myGuardianCode || "Loading..."}</Text>
+          </View>
+
+          <SectionHeader title="My Guardians (App Users)" subtitle="Users who can monitor your live alerts remotely." />
+          <View style={styles.formCard}>
+            <Text style={styles.inputLabel}>Guardian Code, Email, or ID *</Text>
             <TextInput
               style={styles.input}
-              placeholder="guardian@example.com"
+              placeholder="e.g. SH-ABC123 or email"
               placeholderTextColor="#94A3B8"
-              keyboardType="email-address"
               autoCapitalize="none"
               value={linkEmail}
               onChangeText={setLinkEmail}
             />
             <PrimaryButton 
-              title={isLinking ? "Linking..." : "Send Link Request"} 
+              title={isLinking ? "Linking..." : "Add Guardian"} 
               onPress={() => handleLinkGuardian(linkEmail)} 
               variant="primary" 
             />
-            <View style={styles.infoBox}>
-               <Text style={styles.note}>
-                 The guardian must have a registered SafeHer account.
-               </Text>
+            
+            <View style={{ marginTop: 16 }}>
+              {myGuardians.length === 0 ? (
+                <Text style={styles.note}>No app guardians linked yet.</Text>
+              ) : (
+                myGuardians.map(g => (
+                  <View key={g.id} style={styles.linkedCard}>
+                    <Text style={styles.contactName}>{g.name}</Text>
+                    <Text style={styles.contactEmail}>{g.email}</Text>
+                    <Text style={styles.statusText}>Status: {g.status}</Text>
+                  </View>
+                ))
+              )}
             </View>
+          </View>
+
+          <SectionHeader title="People I'm Guarding" subtitle="Users who have added you as their guardian." />
+          <View style={[styles.formCard, { marginBottom: 40 }]}>
+            {watching.length === 0 ? (
+               <Text style={styles.note}>You are not guarding anyone yet.</Text>
+            ) : (
+               watching.map(w => (
+                 <View key={w.id} style={styles.linkedCard}>
+                   <Text style={styles.contactName}>{w.name}</Text>
+                   <Text style={styles.contactEmail}>{w.email}</Text>
+                   <Text style={styles.statusText}>Status: {w.status}</Text>
+                 </View>
+               ))
+            )}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -241,4 +309,7 @@ const styles = StyleSheet.create({
   clearBtn: { flex: 1, marginBottom: 0 },
   infoBox: { backgroundColor: '#F8FAFC', padding: 12, borderRadius: 8, marginTop: 16 },
   note: { fontSize: 13, color: '#64748B', fontStyle: 'italic', textAlign: 'center' },
+  codeText: { fontSize: 24, fontWeight: '800', color: '#4F46E5', textAlign: 'center', letterSpacing: 2 },
+  linkedCard: { backgroundColor: '#F8FAFC', padding: 12, borderRadius: 8, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
+  statusText: { fontSize: 12, color: '#10B981', fontWeight: '700', marginTop: 4, textTransform: 'uppercase' },
 });
