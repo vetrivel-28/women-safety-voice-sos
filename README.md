@@ -457,12 +457,13 @@ Contributions are welcome.
 
 ---
 
-# 👨‍💻 Authors
+## 👨‍💻 Authors
 
-**Vetrivel **
-**Annie Sherlyn **
-
+**Vetrivel A**  
 AI • Data Engineering • Backend Development
+
+**Annie Sherlyn**  
+Frontend • Mobile Application Development
 
 ---
 
