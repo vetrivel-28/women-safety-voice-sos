@@ -8,6 +8,8 @@ export type RootStackParamList = {
   DeadManCheckIn: undefined;
   AlertHistory: undefined;
   Settings: undefined;
+  GuardianDashboard: undefined;
+  GuardianAlertDetails: { alertId?: string; journeyId?: string };
 };
 
 export type AlertStatus = 'ACTIVE' | 'CANCELLED' | 'SILENT_DURESS_ACTIVE' | 'RESOLVED';

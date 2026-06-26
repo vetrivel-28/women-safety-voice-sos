@@ -35,13 +35,6 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     loadCachedContacts();
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) {
-        fetchContacts(session.access_token);
-      }
-    });
-
     supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session) {

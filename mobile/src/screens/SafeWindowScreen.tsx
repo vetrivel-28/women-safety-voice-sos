@@ -8,7 +8,7 @@ import { searchPlaces, geocodePlace, PlaceResult } from '../services/geocodingSe
 import { formatDistance } from '../utils/geoUtils';
 
 export const SafeWindowScreen: React.FC = () => {
-  const { safeWindow, startSafeWindow, endSafeWindow, getRemainingSeconds, getCheckInRemainingSeconds, markCheckInSafe, distanceToDestination, resumeRoute, cancelDeviationWarning, batteryOptimizationDenied, openBatterySettings } = useSafeWindow();
+  const { safeWindow, startSafeWindow, endSafeWindow, getRemainingSeconds, getCheckInRemainingSeconds, markCheckInSafe, distanceToDestination, resumeRoute, cancelDeviationWarning, batteryOptimizationDenied, openBatterySettings, isStartingJourney } = useSafeWindow();
   
   const [timeLeft, setTimeLeft] = useState(getRemainingSeconds());
   const [checkInTimeLeft, setCheckInTimeLeft] = useState(getCheckInRemainingSeconds());
@@ -314,10 +314,10 @@ export const SafeWindowScreen: React.FC = () => {
               <View style={styles.card}>
                 <SectionHeader title="Start Journey" subtitle="Select expected travel time" />
                 <View style={styles.buttonGrid}>
-                  <PrimaryButton style={styles.gridButton} title="15 min" disabled={isStarting} onPress={() => handleStart(15)} variant="dark" />
-                  <PrimaryButton style={styles.gridButton} title="30 min" disabled={isStarting} onPress={() => handleStart(30)} variant="dark" />
-                  <PrimaryButton style={styles.gridButton} title="60 min" disabled={isStarting} onPress={() => handleStart(60)} variant="dark" />
-                  <PrimaryButton style={styles.gridButton} title="Test (30s)" disabled={isStarting} onPress={() => handleStart(0.5)} variant="outline" />
+                  <PrimaryButton style={styles.gridButton} title={isStartingJourney || (isStarting && !isStartingJourney) ? "Starting..." : "15 min"} disabled={isStarting || isStartingJourney} onPress={() => handleStart(15)} variant="dark" />
+                  <PrimaryButton style={styles.gridButton} title={isStartingJourney || (isStarting && !isStartingJourney) ? "Starting..." : "30 min"} disabled={isStarting || isStartingJourney} onPress={() => handleStart(30)} variant="dark" />
+                  <PrimaryButton style={styles.gridButton} title={isStartingJourney || (isStarting && !isStartingJourney) ? "Starting..." : "60 min"} disabled={isStarting || isStartingJourney} onPress={() => handleStart(60)} variant="dark" />
+                  <PrimaryButton style={styles.gridButton} title={isStartingJourney || (isStarting && !isStartingJourney) ? "Starting..." : "Test (30s)"} disabled={isStarting || isStartingJourney} onPress={() => handleStart(0.5)} variant="outline" />
                 </View>
               </View>
             </View>

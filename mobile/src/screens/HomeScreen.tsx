@@ -91,6 +91,13 @@ export default function HomeScreen() {
         <SectionHeader title="Quick Actions" />
 
         <QuickActionCard
+          title="Guardian Command Center"
+          subtitle="Monitor people you protect"
+          icon="🛡️"
+          onPress={() => navigation.navigate('GuardianDashboard')}
+        />
+
+        <QuickActionCard
           title="Check-In Timer"
           subtitle="Set a timer during travel"
           icon="⏳"

@@ -44,6 +44,9 @@ const sanitizeForLog = (headers: any) => {
   return sanitized;
 };
 
+// Prevent duplicate log spam for recurring network errors
+const lastNetworkErrors: Record<string, number> = {};
+
 // Request Interceptor: Attach JWT and Log
 apiClient.interceptors.request.use(
   async (config) => {
@@ -100,35 +103,25 @@ apiClient.interceptors.response.use(
         headers: error.response.headers
       });
     } else if (error.request) {
-      console.error(`[API Network Exception] ${config?.method?.toUpperCase()} ${config?.url}`);
-      console.error(`[API Exception Details]`, {
-        elapsedMs: elapsed,
-        message: error.message,
-        code: error.code
-      });
+      const logKey = `${config?.method?.toUpperCase()} ${config?.url}`;
+      const now = Date.now();
+      const lastLogged = lastNetworkErrors[logKey] || 0;
+      
+      if (now - lastLogged >= 60000) {
+        lastNetworkErrors[logKey] = now;
+        console.error(`[API Network Exception] ${logKey}`);
+        console.error(`[API Exception Details]`, {
+          elapsedMs: elapsed,
+          message: error.message,
+          code: error.code
+        });
+      }
       
       // Enhance network error
       error.isNetworkError = true;
       error.customMessage = `Cannot reach backend.\nBackend URL: ${config?.baseURL}\n\nPossible causes:\n• backend not running\n• phone not on same Wi-Fi\n• firewall\n• invalid backend URL`;
     } else {
       console.error(`[API Error]`, error.message);
-    }
-
-    // Retry logic for transient failures (e.g. Network Error or 5xx)
-    if (config) {
-      const currentRetryStr = config.headers?.['X-Retry-Count'] || '0';
-      const currentRetry = parseInt(currentRetryStr as string, 10);
-      const MAX_RETRIES = 2;
-      
-      if (currentRetry < MAX_RETRIES && (error.isNetworkError || (error.response && error.response.status >= 500))) {
-        const nextRetry = currentRetry + 1;
-        config.headers['X-Retry-Count'] = nextRetry.toString();
-        
-        console.log(`[API Retry] Retrying request ${config.url} (${nextRetry}/${MAX_RETRIES})...`);
-        // Wait for a brief delay before retrying
-        await new Promise(resolve => setTimeout(resolve, 1000 * nextRetry));
-        return apiClient(config);
-      }
     }
 
     return Promise.reject(error);

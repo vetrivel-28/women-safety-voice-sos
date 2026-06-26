@@ -11,6 +11,8 @@ import { SafeWindowScreen } from '../screens/SafeWindowScreen';
 import { DeadManCheckInScreen } from '../screens/DeadManCheckInScreen';
 import { AlertHistoryScreen } from '../screens/AlertHistoryScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
+import { GuardianDashboardScreen } from '../screens/GuardianDashboardScreen';
+import { GuardianAlertDetailsScreen } from '../screens/GuardianAlertDetailsScreen';
 import LoginScreen from '../screens/LoginScreen';
 import { supabase } from '../lib/supabaseClient';
 import { Session } from '@supabase/supabase-js';
@@ -95,6 +97,8 @@ export const AppNavigator = () => {
           <Stack.Screen name="DeadManCheckIn" component={DeadManCheckInScreen} options={{ title: 'Dead Man Check-in' }} />
           <Stack.Screen name="AlertHistory" component={AlertHistoryScreen} options={{ title: 'Alert History' }} />
           <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
+          <Stack.Screen name="GuardianDashboard" component={GuardianDashboardScreen} options={{ title: 'Guardian Command Center' }} />
+          <Stack.Screen name="GuardianAlertDetails" component={GuardianAlertDetailsScreen} options={{ title: 'Alert Details', headerStyle: { backgroundColor: '#FEF2F2' } }} />
         </>
       )}
     </Stack.Navigator>

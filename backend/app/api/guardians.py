@@ -1,5 +1,6 @@
 import logging
 from typing import List
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.auth import get_current_user
@@ -124,6 +125,36 @@ def get_guardian_alerts(auth_data: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Error fetching guardian alerts: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not fetch guardian alerts")
+
+@router.put("/alerts/{alert_id}/resolve", status_code=status.HTTP_200_OK)
+def resolve_guardian_alert(alert_id: str, auth_data: dict = Depends(get_current_user)):
+    user = auth_data["user"]
+    service_client = get_service_role_client()
+
+    try:
+        # First ensure this user is actually a guardian of the person who created the alert
+        links = service_client.table("guardian_links").select("user_id").eq("guardian_user_id", user.id).execute()
+        protected_user_ids = [link["user_id"] for link in links.data or []]
+        
+        if not protected_user_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to resolve this alert")
+
+        # Now fetch the alert to check its owner
+        alert = service_client.table("sos_alerts").select("user_id, status").eq("id", alert_id).execute()
+        if not alert.data:
+            raise HTTPException(status_code=404, detail="Alert not found")
+            
+        if alert.data[0]["user_id"] not in protected_user_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to resolve this alert")
+
+        # Resolve the alert
+        result = service_client.table("sos_alerts").update({"status": "RESOLVED"}).eq("id", alert_id).execute()
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resolving guardian alert: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not resolve guardian alert")
 
 @router.get("/safe-windows", response_model=List[dict])
 def get_guardian_safe_windows(auth_data: dict = Depends(get_current_user)):

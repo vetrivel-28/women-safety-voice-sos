@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 import math
 
 from app.core.auth import get_current_user
-from app.db.client import get_user_supabase_client, get_service_role_client
+from app.db.client import get_service_role_client
 from app.services.notification_service import notification_service
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ def parse_utc(value):
 @router.post("", response_model=JourneyResponse, status_code=status.HTTP_201_CREATED)
 def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user)):
     user = auth_data["user"]
-    supabase = get_user_supabase_client(auth_data["token"])
+    supabase = get_service_role_client()
 
     try:
         # Pre-check for active journey
@@ -145,7 +145,7 @@ def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user))
 @router.get("", response_model=List[JourneyResponse])
 def get_journeys(auth_data: dict = Depends(get_current_user)):
     user = auth_data["user"]
-    supabase = get_user_supabase_client(auth_data["token"])
+    supabase = get_service_role_client()
 
     try:
         result = supabase.table("safe_windows").select("*").eq("user_id", user.id).order("started_at", desc=True).execute()
@@ -162,7 +162,7 @@ def get_journeys(auth_data: dict = Depends(get_current_user)):
 @router.post("/{journey_id}/complete", response_model=JourneyResponse)
 def complete_journey(journey_id: str, auth_data: dict = Depends(get_current_user)):
     user = auth_data["user"]
-    supabase = get_user_supabase_client(auth_data["token"])
+    supabase = get_service_role_client()
 
     try:
         now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -285,7 +285,16 @@ def handle_missed_checkin(journey_id: str, auth_data: dict = Depends(get_current
                 "visible_message": "Journey Mode check-in missed",
                 "cancel_method": "NONE"
             }
-            
+            # Auto-resolve previous active alerts for this user
+            try:
+                service_client.table("sos_alerts").update({
+                    "status": "RESOLVED",
+                    "cancel_method": "AUTO_RESOLVED",
+                    "cancelled_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                }).eq("user_id", user.id).eq("status", "ACTIVE").execute()
+            except Exception as resolve_err:
+                logger.warning(f"Failed to auto-resolve previous alerts: {resolve_err}")
+
             sos_res = service_client.table("sos_alerts").insert(sos_data).execute()
             
             if sos_res.data:
@@ -326,7 +335,7 @@ def handle_missed_checkin(journey_id: str, auth_data: dict = Depends(get_current
 @router.post("/{journey_id}/location", response_model=JourneyResponse)
 def update_location(journey_id: str, location_in: dict, auth_data: dict = Depends(get_current_user)):
     user = auth_data["user"]
-    supabase = get_user_supabase_client(auth_data["token"])
+    supabase = get_service_role_client()
 
     try:
         update_data = {

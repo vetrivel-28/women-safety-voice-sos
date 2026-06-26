@@ -48,8 +48,19 @@ def create_sos_alert(alert_in: AlertCreate, auth_data: dict = Depends(get_curren
         "location_long": alert_in.longitude,
         "location_map_link": alert_in.map_link,
     }
-    
     try:
+        from datetime import datetime, timezone
+        
+        # Auto-resolve previous active alerts for this user
+        try:
+            service_client.table("sos_alerts").update({
+                "status": "RESOLVED",
+                "cancel_method": "AUTO_RESOLVED",
+                "cancelled_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            }).eq("user_id", user.id).eq("status", "ACTIVE").execute()
+        except Exception as resolve_err:
+            logger.warning(f"Failed to auto-resolve previous alerts: {resolve_err}")
+
         result = service_client.table("sos_alerts").insert(alert_data).execute()
         if not result.data:
             raise HTTPException(status_code=500, detail="Failed to insert alert")

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
-from app.db.client import get_user_supabase_client, get_service_role_client
+from app.db.client import get_service_role_client
 from app.api.auth import get_current_user
 from app.schemas.profile import ProfileUpdate, ProfileResponse
 import logging
