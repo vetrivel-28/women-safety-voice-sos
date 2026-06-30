@@ -115,6 +115,48 @@ class NotificationService:
             
         return results
 
+    def notify_family_members(self, user_id: str, alert_type: str, user: Any, location: Dict[str, Any] = None, alert_id: str = None) -> list:
+        try:
+            from app.db.client import get_service_role_client
+            service_client = get_service_role_client()
+            # Find the active family the user belongs to
+            membership_res = service_client.table("family_members").select("family_id").eq("user_id", user_id).eq("status", "active").execute()
+            if not membership_res.data:
+                return []
+                
+            family_id = membership_res.data[0]["family_id"]
+            
+            # Find all other active members in the same family
+            members_res = service_client.table("family_members").select("user_id").eq("family_id", family_id).eq("status", "active").neq("user_id", user_id).execute()
+            other_member_ids = [m["user_id"] for m in (members_res.data or [])]
+            
+            if not other_member_ids:
+                return []
+
+            # Queue offline notifications in family_notification_events
+            results = []
+            for member_id in other_member_ids:
+                event_data = {
+                    "family_id": family_id,
+                    "user_id": member_id,
+                    "type": "FAMILY_SOS",
+                    "payload": {
+                        "trigger_type": alert_type,
+                        "triggered_by_user_id": user_id,
+                        "location": location,
+                        "alert_id": alert_id
+                    },
+                    "status": "queued"
+                }
+                service_client.table("family_notification_events").insert(event_data).execute()
+                results.append({"user_id": member_id, "status": "queued"})
+                
+            return results
+        except Exception as e:
+            logger.error(f"Failed to notify family members: {e}")
+            return []
+
+
     def send_sos_sms_to_emergency_contacts(self, user_id: str, alert_id: str, alert_payload: Dict[str, Any] = None, user: Any = None) -> Dict[str, Any]:
         result = {"sent_count": 0, "failed_count": 0, "errors": [], "sms_status": "failed"}
         if alert_payload is None:

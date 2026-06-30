@@ -1,6 +1,7 @@
 export type RootStackParamList = {
   Login: undefined;
-  Home: undefined;
+  MainTabs: undefined; // The new bottom tab navigator
+  Home: undefined; // Keeping it for any internal navigation reference if needed
   SOS: undefined;
   SilentSOS: undefined;
   Contacts: undefined;
@@ -12,6 +13,12 @@ export type RootStackParamList = {
   GuardianAlertDetails: { alertId?: string; journeyId?: string };
   GuardianPersonDetail: { protectedUserId: string; name?: string; status?: string };
   Notifications: undefined;
+  FamilyDashboard: undefined;
+  FamilyLiveMap: undefined;
+  FamilyMembers: undefined;
+  FamilySettings: undefined;
+  JoinFamily: undefined;
+  CreateFamily: undefined;
 };
 
 export type AlertStatus = 'ACTIVE' | 'CANCELLED' | 'SILENT_DURESS_ACTIVE' | 'RESOLVED';

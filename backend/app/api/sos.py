@@ -104,6 +104,16 @@ def create_sos_alert(alert_in: AlertCreate, background_tasks: BackgroundTasks, a
                 location=location
             )
             logger.info(f"All stored guardians notification status: {all_status}")
+
+            # Notify all family members
+            family_status = notification_service.notify_family_members(
+                user_id=user.id,
+                alert_type=norm_trigger,
+                user=user,
+                location=location,
+                alert_id=created_alert["id"]
+            )
+            logger.info(f"Family members notification status: {family_status}")
         except httpx.TimeoutException:
             raise
         except httpx.RequestError:

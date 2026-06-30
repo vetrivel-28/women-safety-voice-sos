@@ -1,7 +1,12 @@
 import React from 'react';
+import { Text } from 'react-native';
 import * as Linking from 'expo-linking';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createNavigationContainerRef } from '@react-navigation/native';
 import { RootStackParamList } from '../types';
+
+export const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 import HomeScreen from '../screens/HomeScreen';
 import { SOSScreen } from '../screens/SOSScreen';
@@ -19,7 +24,53 @@ import LoginScreen from '../screens/LoginScreen';
 import { supabase } from '../lib/supabaseClient';
 import { Session } from '@supabase/supabase-js';
 
+// Import Family Screens
+import FamilyDashboardScreen from '../screens/FamilyDashboardScreen';
+import FamilyLiveMapScreen from '../screens/FamilyLiveMapScreen';
+import FamilyMembersScreen from '../screens/FamilyMembersScreen';
+import FamilySettingsScreen from '../screens/FamilySettingsScreen';
+import JoinFamilyScreen from '../screens/JoinFamilyScreen';
+import CreateFamilyScreen from '../screens/CreateFamilyScreen';
+
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const Tab = createBottomTabNavigator();
+
+// ... existing MainTabs ...
+function MainTabs() {
+  return (
+    <Tab.Navigator
+      screenOptions={{
+        headerShown: false,
+        tabBarActiveTintColor: '#EF4444',
+        tabBarInactiveTintColor: '#94A3B8',
+        tabBarStyle: {
+          backgroundColor: '#FFF7F7',
+          borderTopWidth: 1,
+          borderTopColor: '#FEE2E2',
+          paddingBottom: 5,
+          paddingTop: 5,
+        },
+      }}
+    >
+      <Tab.Screen 
+        name="HomeTab" 
+        component={HomeScreen} 
+        options={{
+          tabBarLabel: 'Home',
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🏠</Text>,
+        }} 
+      />
+      <Tab.Screen 
+        name="FamilyTab" 
+        component={FamilyDashboardScreen} 
+        options={{
+          tabBarLabel: 'Family',
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👨‍👩‍👧‍👦</Text>,
+        }} 
+      />
+    </Tab.Navigator>
+  );
+}
 
 export const AppNavigator = () => {
   const [session, setSession] = React.useState<Session | null>(null);
@@ -37,6 +88,8 @@ export const AppNavigator = () => {
 
     const handleDeepLink = async ({ url }: { url: string }) => {
       if (!url) return;
+      
+      // Handle Auth
       const match = url.match(/#access_token=([^&]+)/);
       const refreshTokenMatch = url.match(/&refresh_token=([^&]+)/);
       
@@ -47,6 +100,20 @@ export const AppNavigator = () => {
           access_token,
           refresh_token,
         });
+        return;
+      }
+      
+      // Handle custom scheme deep links (e.g., safeher://sos?family_id=123)
+      try {
+        const parsedUrl = Linking.parse(url);
+        if (parsedUrl.path === 'sos' || parsedUrl.queryParams?.type === 'sos') {
+           // Deep link directly to family dashboard
+           if (navigationRef.current) {
+             navigationRef.current.navigate('FamilyDashboard');
+           }
+        }
+      } catch (e) {
+        console.warn('Failed to parse deep link', e);
       }
     };
 
@@ -63,12 +130,12 @@ export const AppNavigator = () => {
   }, []);
 
   if (loading) {
-    return null; // Or a simple loading screen
+    return null; 
   }
 
   return (
     <Stack.Navigator
-      initialRouteName={session ? "Home" : "Login"}
+      initialRouteName={session ? "MainTabs" : "Login"}
       screenOptions={{
         headerStyle: {
           backgroundColor: '#FFF7F7',
@@ -88,8 +155,8 @@ export const AppNavigator = () => {
       ) : (
         <>
           <Stack.Screen 
-            name="Home" 
-            component={HomeScreen} 
+            name="MainTabs" 
+            component={MainTabs} 
             options={{ headerShown: false }} 
           />
           <Stack.Screen name="SOS" component={SOSScreen} options={{ title: 'Manual SOS' }} />
@@ -103,6 +170,13 @@ export const AppNavigator = () => {
           <Stack.Screen name="GuardianAlertDetails" component={GuardianAlertDetailsScreen} options={{ title: 'Alert Details', headerStyle: { backgroundColor: '#FEF2F2' } }} />
           <Stack.Screen name="GuardianPersonDetail" component={GuardianPersonDetailScreen} options={{ title: 'Protected Person' }} />
           <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'Notifications' }} />
+          
+          {/* Family Screens */}
+          <Stack.Screen name="FamilyLiveMap" component={FamilyLiveMapScreen} options={{ title: 'Family Live Map' }} />
+          <Stack.Screen name="FamilyMembers" component={FamilyMembersScreen} options={{ title: 'Manage Members' }} />
+          <Stack.Screen name="FamilySettings" component={FamilySettingsScreen} options={{ title: 'Family Settings' }} />
+          <Stack.Screen name="JoinFamily" component={JoinFamilyScreen} options={{ headerShown: false }} />
+          <Stack.Screen name="CreateFamily" component={CreateFamilyScreen} options={{ headerShown: false }} />
         </>
       )}
     </Stack.Navigator>
