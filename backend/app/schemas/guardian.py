@@ -2,6 +2,8 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 
 class GuardianLinkRequest(BaseModel):
+    ward_code: Optional[str] = None
+    code: Optional[str] = None
     guardian_email: Optional[EmailStr] = None
     guardian_code: Optional[str] = None
     guardian_user_id: Optional[str] = None

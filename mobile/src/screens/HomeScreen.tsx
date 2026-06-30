@@ -6,6 +6,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types';
 import { useContacts } from '../context/ContactsContext';
 import { useSafeWindow } from '../context/SafeWindowContext';
+import { useNotifications } from '../context/NotificationContext';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SafetyCard } from '../components/SafetyCard';
 import { QuickActionCard } from '../components/QuickActionCard';
@@ -21,6 +22,7 @@ export default function HomeScreen() {
   const { contacts } = useContacts();
   const { safeWindow, checkAndPromptBatteryExemption } = useSafeWindow();
   const { createAlert } = useAlert();
+  const { unreadCount } = useNotifications();
   const [session, setSession] = useState<any>(null);
 
   useEffect(() => {
@@ -55,6 +57,17 @@ export default function HomeScreen() {
             <Text style={styles.subtitle}>Emergency help, quietly when needed.</Text>
           </View>
           <View style={styles.pillsContainer}>
+            <TouchableOpacity 
+              style={styles.bellBtn} 
+              onPress={() => navigation.navigate('Notifications' as any)}
+            >
+              <Text style={styles.bellIcon}>🔔</Text>
+              {unreadCount > 0 && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
             <TouchableOpacity 
               style={styles.profileAvatar} 
               onPress={() => navigation.navigate('Settings')}
@@ -157,8 +170,39 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   pillsContainer: {
-    alignItems: 'flex-end',
-    gap: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  bellBtn: {
+    position: 'relative',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F1F5F9',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bellIcon: {
+    fontSize: 20,
+  },
+  badge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    backgroundColor: '#EF4444',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FAFAF9',
+  },
+  badgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
   },
   profileAvatar: {
     width: 44,

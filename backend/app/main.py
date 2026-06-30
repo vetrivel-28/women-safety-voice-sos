@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import auth, alerts, guardians, sos, profile, contacts, journeys, places
+from app.api import auth, alerts, guardians, sos, profile, contacts, journeys, places, notifications
 from app.core.config import settings
 from app.db.client import get_supabase_client
 from contextlib import asynccontextmanager
@@ -79,6 +79,7 @@ app.include_router(profile.router)
 app.include_router(contacts.router)
 app.include_router(journeys.router)
 app.include_router(places.router)
+app.include_router(notifications.router)
 
 @app.get("/")
 async def root():

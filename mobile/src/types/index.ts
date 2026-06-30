@@ -11,6 +11,7 @@ export type RootStackParamList = {
   GuardianDashboard: undefined;
   GuardianAlertDetails: { alertId?: string; journeyId?: string };
   GuardianPersonDetail: { protectedUserId: string; name?: string; status?: string };
+  Notifications: undefined;
 };
 
 export type AlertStatus = 'ACTIVE' | 'CANCELLED' | 'SILENT_DURESS_ACTIVE' | 'RESOLVED';

@@ -39,9 +39,8 @@ def get_my_guardian_code(auth_data: dict = Depends(get_current_user)):
         
         # If no guardian code, generate one
         if not profile.get("guardian_code"):
-            import hashlib
-            import uuid
-            code = "SH-" + hashlib.md5(str(uuid.uuid4()).encode()).hexdigest()[:6].upper()
+            import random
+            code = f"{random.randint(0, 999999):06d}"
             service_client.table("profiles").update({"guardian_code": code}).eq("id", user.id).execute()
             profile["guardian_code"] = code
 
@@ -49,7 +48,8 @@ def get_my_guardian_code(auth_data: dict = Depends(get_current_user)):
             "user_id": profile["id"],
             "email": profile.get("email"),
             "full_name": profile.get("full_name"),
-            "guardian_code": profile["guardian_code"]
+            "ward_code": profile["guardian_code"],
+            "code": profile["guardian_code"]
         }
     except httpx.TimeoutException:
         raise
@@ -520,7 +520,6 @@ def delete_guardian_link(link_id: str, auth_data: dict = Depends(get_current_use
 
 @router.post(
     "/link",
-    response_model=GuardianLinkResponse,
     status_code=status.HTTP_201_CREATED
 )
 def link_guardian(
@@ -528,57 +527,43 @@ def link_guardian(
     auth_data: dict = Depends(get_current_user)
 ):
     """
-    Link a guardian using their email address.
+    Guardian enters ward's 6-digit code to monitor that ward.
     """
-
     user = auth_data["user"]
     service_client = get_service_role_client()
 
-    logger.info(
-        f"Linking guardian {link_in.guardian_email} "
-        f"to user {user.id}"
-    )
+    code = getattr(link_in, "ward_code", None) or getattr(link_in, "code", None) or getattr(link_in, "guardian_code", None)
+    
+    import re
+    if not code or not re.match(r"^[0-9]{6}$", code):
+        raise HTTPException(status_code=400, detail="Invalid ward code. Must be exactly 6 digits.")
+
+    logger.info(f"Guardian {user.id} attempting to link ward code {code}")
 
     try:
-        # Look up guardian in profiles table
-        if getattr(link_in, "guardian_code", None):
-            guardian_result = (
-                service_client
-                .table("profiles")
-                .select("id,email")
-                .eq("guardian_code", link_in.guardian_code)
-                .execute()
-            )
-        elif getattr(link_in, "guardian_user_id", None):
-            guardian_result = (
-                service_client
-                .table("profiles")
-                .select("id,email")
-                .eq("id", link_in.guardian_user_id)
-                .execute()
-            )
-        else:
-            guardian_result = (
-                service_client
-                .table("profiles")
-                .select("id,email")
-                .eq("email", link_in.guardian_email)
-                .execute()
-            )
+        # Find protected user profile by ward_code (which is stored in guardian_code for now)
+        ward_result = (
+            service_client
+            .table("profiles")
+            .select("id,full_name")
+            .eq("guardian_code", code)
+            .execute()
+        )
 
-        if not guardian_result.data:
+        if not ward_result.data:
             raise HTTPException(
                 status_code=404,
-                detail="Guardian not found"
+                detail="Ward not found for this code"
             )
 
-        guardian_id = guardian_result.data[0]["id"]
+        ward_id = ward_result.data[0]["id"]
+        ward_name = ward_result.data[0].get("full_name") or "Unknown"
 
         # Prevent self-linking
-        if guardian_id == user.id:
+        if ward_id == user.id:
             raise HTTPException(
                 status_code=400,
-                detail="Cannot link yourself as guardian"
+                detail="Cannot link yourself"
             )
 
         # Check for existing link
@@ -586,22 +571,24 @@ def link_guardian(
             service_client
             .table("guardian_links")
             .select("*")
-            .eq("user_id", user.id)
-            .eq("guardian_user_id", guardian_id)
+            .eq("user_id", ward_id)
+            .eq("guardian_user_id", user.id)
             .execute()
         )
 
         if existing_link.data:
             from fastapi.responses import JSONResponse
-            # Return 200 with message
-            data = existing_link.data[0]
-            data["message"] = "Already linked"
-            return JSONResponse(status_code=200, content=data)
+            return JSONResponse(status_code=200, content={
+                "message": "Already linked",
+                "protected_user_id": ward_id,
+                "name": ward_name,
+                "status": existing_link.data[0]["status"]
+            })
 
         # Create guardian link
         link_data = {
-            "user_id": user.id,
-            "guardian_user_id": guardian_id,
+            "user_id": ward_id,
+            "guardian_user_id": user.id,
             "status": "ACTIVE"
         }
 
@@ -618,8 +605,12 @@ def link_guardian(
                 detail="Failed to create guardian link"
             )
 
-        return result.data[0]
-
+        return {
+            "message": "Ward linked successfully",
+            "protected_user_id": ward_id,
+            "name": ward_name,
+            "status": "ACTIVE"
+        }
     except HTTPException:
         raise
 
@@ -714,7 +705,34 @@ def create_guardian_action(alert_id: str, payload: ActionRequest, auth_data: dic
                 "action_type": payload.action_type
             }
         )
-            
+
+        # Map action to a friendly title
+        action_titles = {
+            "I_AM_RESPONDING": "Guardian is responding",
+            "NAVIGATING_TO_YOU": "Guardian is on the way",
+            "CALLING_POLICE": "Guardian is calling police",
+            "VIEWED_ALERT": "Guardian viewed alert",
+            "RESOLVED": "Guardian resolved the alert",
+            "FALSE_ALARM": "Guardian marked false alarm"
+        }
+        title = action_titles.get(payload.action_type, f"Guardian action: {payload.action_type}")
+        msg = payload.message or "Guardian reacted to your SOS."
+
+        # Insert IN_APP_NOTIFICATION for the protected user
+        notification_service._log_event(
+            event_type="IN_APP_NOTIFICATION",
+            status="UNREAD",
+            channel="IN_APP",
+            user_id=protected_user_id,
+            guardian_user_id=user.id,
+            alert_id=alert_id,
+            journey_id=journey_id,
+            recipient=title,
+            message=msg,
+            metadata={
+                "action_type": payload.action_type
+            }
+        )
         return result.data[0]
     except HTTPException:
         raise

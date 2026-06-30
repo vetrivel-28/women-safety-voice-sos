@@ -14,6 +14,7 @@ import { SettingsScreen } from '../screens/SettingsScreen';
 import { GuardianDashboardScreen } from '../screens/GuardianDashboardScreen';
 import { GuardianAlertDetailsScreen } from '../screens/GuardianAlertDetailsScreen';
 import { GuardianPersonDetailScreen } from '../screens/GuardianPersonDetailScreen';
+import { NotificationsScreen } from '../screens/NotificationsScreen';
 import LoginScreen from '../screens/LoginScreen';
 import { supabase } from '../lib/supabaseClient';
 import { Session } from '@supabase/supabase-js';
@@ -101,6 +102,7 @@ export const AppNavigator = () => {
           <Stack.Screen name="GuardianDashboard" component={GuardianDashboardScreen} options={{ title: 'Guardian Command Center' }} />
           <Stack.Screen name="GuardianAlertDetails" component={GuardianAlertDetailsScreen} options={{ title: 'Alert Details', headerStyle: { backgroundColor: '#FEF2F2' } }} />
           <Stack.Screen name="GuardianPersonDetail" component={GuardianPersonDetailScreen} options={{ title: 'Protected Person' }} />
+          <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'Notifications' }} />
         </>
       )}
     </Stack.Navigator>
