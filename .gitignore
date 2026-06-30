@@ -6,3 +6,23 @@ __pycache__/
 .vscode/
 .idea/
 *.log
+# Debug / temporary files
+*grep*.txt
+diff*.txt
+log.txt
+scratch*.py
+old_*.py
+schema.json
+
+# Local auth/test files
+auth_test.py
+auth_admin_test.py
+test_*.py
+test_token.txt
+test_user_id.txt
+check_schema.py
+
+# Secrets / environment
+.env
+.env.*
+*.local

@@ -1,3 +1,4 @@
+import httpx
 import logging
 from typing import List
 from datetime import datetime, timezone
@@ -50,6 +51,10 @@ def get_my_guardian_code(auth_data: dict = Depends(get_current_user)):
             "full_name": profile.get("full_name"),
             "guardian_code": profile["guardian_code"]
         }
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error fetching guardian code: {e}")
         raise HTTPException(status_code=500, detail="Could not fetch guardian code")
@@ -77,19 +82,254 @@ def get_guardians(auth_data: dict = Depends(get_current_user)):
                 "created_at": row["created_at"]
             })
         return mapped
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error fetching guardians: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not fetch guardians")
 
+from typing import Optional
+
+def safe_dt(value):
+    return str(value) if value else ""
+
+def normalize_profile(profile_value):
+    if isinstance(profile_value, list):
+        return profile_value[0] if profile_value else {}
+    if isinstance(profile_value, dict):
+        return profile_value
+    return {}
+
+def compute_protected_user_status(service_client, user_id: str):
+    data = {
+        "protected_user_id": user_id,
+        "protectedUserId": user_id,
+        "status": "UNKNOWN",
+        "active_alert_count": 0,
+        "activeAlertCount": 0,
+        "active_journey_count": 0,
+        "activeJourneyCount": 0,
+        "latest_activity": None,
+        "last_location": {
+            "latitude": None,
+            "longitude": None,
+            "accuracy": None,
+            "captured_at": None
+        }
+    }
+    
+    try:
+        alerts = service_client.table("sos_alerts").select("*").eq("user_id", user_id).execute()
+        alert_list = [a for a in alerts.data or [] if str(a.get("status") or "").upper() in ["ACTIVE", "SILENT_DURESS_ACTIVE"]]
+    except Exception as e:
+        logger.error(f"Error fetching alerts: {e}")
+        alert_list = []
+        
+    data["active_alert_count"] = len(alert_list)
+    data["activeAlertCount"] = len(alert_list)
+    
+    latest_sos = None
+    for a in alert_list:
+        if not latest_sos or safe_dt(a.get("created_at")) > safe_dt(latest_sos.get("created_at")):
+            latest_sos = a
+            
+    if latest_sos:
+        data["latest_activity"] = {
+            "type": "SOS_ALERT",
+            "title": "Active SOS",
+            "message": latest_sos.get("visible_message") or "SOS Alert Sent",
+            "created_at": latest_sos.get("created_at")
+        }
+        if latest_sos.get("location_lat") is not None and latest_sos.get("location_long") is not None:
+            data["last_location"] = {
+                "latitude": latest_sos.get("location_lat"),
+                "longitude": latest_sos.get("location_long"),
+                "accuracy": latest_sos.get("location_accuracy"),
+                "captured_at": latest_sos.get("created_at")
+            }
+
+    try:
+        journeys = service_client.table("safe_windows").select("*").eq("user_id", user_id).execute()
+        journey_list = journeys.data or []
+    except Exception as e:
+        logger.error(f"Error fetching safe windows: {e}")
+        journey_list = []
+    
+    active_journeys = [j for j in journey_list if str(j.get("status") or "").lower() == "active"]
+    missed_journeys = [j for j in journey_list if str(j.get("status") or "").lower() == "missed"]
+    
+    data["active_journey_count"] = len(active_journeys)
+    data["activeJourneyCount"] = len(active_journeys)
+    
+    latest_journey = None
+    for j in active_journeys + missed_journeys:
+        if not latest_journey or safe_dt(j.get("started_at")) > safe_dt(latest_journey.get("started_at")):
+            latest_journey = j
+            
+    if latest_journey and not data["latest_activity"]:
+        data["latest_activity"] = {
+            "type": "JOURNEY",
+            "title": "Active Journey" if str(latest_journey.get("status")).lower() == "active" else "Missed Check-in",
+            "message": "User is sharing location",
+            "created_at": latest_journey.get("started_at")
+        }
+        
+    if latest_journey and data["last_location"]["latitude"] is None:
+        if latest_journey.get("current_latitude") is not None and latest_journey.get("current_longitude") is not None:
+            data["last_location"] = {
+                "latitude": latest_journey.get("current_latitude"),
+                "longitude": latest_journey.get("current_longitude"),
+                "accuracy": None,
+                "captured_at": None
+            }
+
+    if data["active_alert_count"] > 0:
+        data["status"] = "EMERGENCY"
+    elif len(missed_journeys) > 0:
+        data["status"] = "MISSED_CHECKIN"
+    elif data["active_journey_count"] > 0:
+        data["status"] = "ACTIVE_JOURNEY"
+    else:
+        data["status"] = "SAFE"
+        
+    return data
+
+@router.get("/dashboard")
+def get_guardian_dashboard(auth_data: dict = Depends(get_current_user)):
+    user = auth_data["user"]
+    service_client = get_service_role_client()
+    try:
+
+        # 1. Fetch ALL linked users
+        links = service_client.table("guardian_links").select("user_id").eq("guardian_user_id", user.id).execute()
+        base_uids = [row.get("user_id") for row in links.data or [] if row.get("user_id")]
+                
+        if not base_uids:
+            return []
+            
+        profiles_res = service_client.table("profiles").select("id, full_name, phone, email").in_("id", base_uids).execute()
+        profiles_map = {p["id"]: p for p in profiles_res.data or []}
+        
+        result = []
+        for uid in base_uids:
+            prof = profiles_map.get(uid, {})
+            user_data = compute_protected_user_status(service_client, uid)
+            user_data["name"] = prof.get("full_name") or "Unknown"
+            user_data["phone"] = prof.get("phone")
+            user_data["email"] = prof.get("email")
+            result.append(user_data)
+
+        return result
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
+    except Exception as e:
+        logger.exception("Failed to fetch guardian dashboard")
+        raise HTTPException(status_code=500, detail="Could not fetch dashboard")
+
+@router.get("/users/{protected_user_id}/summary")
+def get_user_summary(protected_user_id: str, auth_data: dict = Depends(get_current_user)):
+    user = auth_data["user"]
+    service_client = get_service_role_client()
+    try:
+        links = service_client.table("guardian_links").select("status").eq("guardian_user_id", user.id).eq("user_id", protected_user_id).eq("status", "ACTIVE").execute()
+        if not links.data:
+            raise HTTPException(status_code=403, detail="Not authorized")
+            
+        prof = service_client.table("profiles").select("*").eq("id", protected_user_id).execute()
+        
+        # Pull all, then filter safely to avoid ENUM crashes
+        aj_res = service_client.table("safe_windows").select("*").eq("user_id", protected_user_id).execute()
+        aa_res = service_client.table("sos_alerts").select("*").eq("user_id", protected_user_id).execute()
+        
+        aj_list = [j for j in aj_res.data or [] if str(j.get("status") or "").lower() in ["active", "missed"]]
+        aj_list.sort(key=lambda x: safe_dt(x.get("started_at")), reverse=True)
+        
+        rc_list = [j for j in aj_res.data or [] if str(j.get("status") or "").lower() in ["completed", "cancelled"]]
+        rc_list.sort(key=lambda x: safe_dt(x.get("started_at")), reverse=True)
+        rc_list = rc_list[:5]
+        
+        aa_list = [a for a in aa_res.data or [] if str(a.get("status") or "").upper() in ["ACTIVE", "SILENT_DURESS_ACTIVE"]]
+        aa_list.sort(key=lambda x: safe_dt(x.get("created_at")), reverse=True)
+        
+        ra_list = aa_res.data or []
+        ra_list.sort(key=lambda x: safe_dt(x.get("created_at")), reverse=True)
+        ra_list = ra_list[:20]
+        
+        status_data = compute_protected_user_status(service_client, protected_user_id)
+        
+        profile_data = normalize_profile(prof.data)
+        
+        return {
+            "protected_user_id": protected_user_id,
+            "protectedUserId": protected_user_id,
+            "profile": profile_data,
+            "status": status_data["status"],
+            "active_alert_count": status_data["active_alert_count"],
+            "active_journey_count": status_data["active_journey_count"],
+            "latest_location": status_data["last_location"],
+            "active_journey": aj_list[0] if aj_list else None,
+            "active_alerts": aa_list,
+            "recent_completed_journeys": rc_list,
+            "recent_activity": ra_list
+        }
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
+    except Exception as e:
+        logger.exception("get_user_summary failed")
+        raise HTTPException(status_code=500, detail="Could not fetch summary")
+
+@router.get("/users/{protected_user_id}/activity")
+def get_user_activity(protected_user_id: str, limit: int = 20, auth_data: dict = Depends(get_current_user)):
+    user = auth_data["user"]
+    service_client = get_service_role_client()
+    try:
+        links = service_client.table("guardian_links").select("status").eq("guardian_user_id", user.id).eq("user_id", protected_user_id).eq("status", "ACTIVE").execute()
+        if not links.data:
+            raise HTTPException(status_code=403, detail="Not authorized")
+            
+        ra = service_client.table("sos_alerts").select("*").eq("user_id", protected_user_id).order("created_at", desc=True).limit(limit).execute()
+        return ra.data or []
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Could not fetch activity")
+
 @router.get("/watching", response_model=List[dict])
-def get_watching(auth_data: dict = Depends(get_current_user)):
+def get_watching(
+    protected_user_id: Optional[str] = None,
+    status: Optional[str] = None,
+    active_only: bool = False,
+    limit: int = 50,
+    auth_data: dict = Depends(get_current_user)
+):
     user = auth_data["user"]
     service_client = get_service_role_client()
 
     try:
         # Get links where this user is the guardian
-        result = service_client.table("guardian_links").select("id, status, created_at, profiles!guardian_links_user_id_fkey(id, full_name, phone, email)").eq("guardian_user_id", user.id).execute()
-        
+        query = service_client.table("guardian_links").select("id, status, created_at, profiles!guardian_links_user_id_fkey(id, full_name, phone, email)").eq("guardian_user_id", user.id)
+        if protected_user_id:
+            query = query.eq("user_id", protected_user_id)
+        if status:
+            query = query.eq("status", status)
+        if active_only:
+            query = query.eq("status", "ACTIVE")
+            
+        result = query.limit(limit).execute()
         mapped = []
         for row in result.data or []:
             prof = row.get("profiles", {})
@@ -103,12 +343,22 @@ def get_watching(auth_data: dict = Depends(get_current_user)):
                 "created_at": row["created_at"]
             })
         return mapped
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error fetching protected users: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not fetch protected users")
 
 @router.get("/alerts", response_model=List[dict])
-def get_guardian_alerts(auth_data: dict = Depends(get_current_user)):
+def get_guardian_alerts(
+    protected_user_id: Optional[str] = None,
+    status: Optional[str] = None,
+    active_only: bool = False,
+    limit: int = 50,
+    auth_data: dict = Depends(get_current_user)
+):
     user = auth_data["user"]
     service_client = get_service_role_client()
 
@@ -120,8 +370,23 @@ def get_guardian_alerts(auth_data: dict = Depends(get_current_user)):
         if not protected_user_ids:
             return []
             
-        alerts = service_client.table("sos_alerts").select("*, profiles!sos_alerts_user_id_fkey(full_name, phone)").in_("user_id", protected_user_ids).order("created_at", desc=True).execute()
+        if protected_user_id:
+            if protected_user_id not in protected_user_ids:
+                return []
+            protected_user_ids = [protected_user_id]
+            
+        query = service_client.table("sos_alerts").select("*, profiles!sos_alerts_user_id_fkey(full_name, phone)").in_("user_id", protected_user_ids)
+        if status:
+            query = query.eq("status", status)
+        if active_only:
+            query = query.in_("status", ["ACTIVE", "SILENT_DURESS_ACTIVE"])
+            
+        alerts = query.order("created_at", desc=True).limit(limit).execute()
         return alerts.data or []
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error fetching guardian alerts: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not fetch guardian alerts")
@@ -152,12 +417,22 @@ def resolve_guardian_alert(alert_id: str, auth_data: dict = Depends(get_current_
         return {"status": "success"}
     except HTTPException:
         raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error resolving guardian alert: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not resolve guardian alert")
 
 @router.get("/safe-windows", response_model=List[dict])
-def get_guardian_safe_windows(auth_data: dict = Depends(get_current_user)):
+def get_guardian_safe_windows(
+    protected_user_id: Optional[str] = None,
+    status: Optional[str] = None,
+    active_only: bool = False,
+    limit: int = 50,
+    auth_data: dict = Depends(get_current_user)
+):
     user = auth_data["user"]
     service_client = get_service_role_client()
 
@@ -168,10 +443,35 @@ def get_guardian_safe_windows(auth_data: dict = Depends(get_current_user)):
         if not protected_user_ids:
             return []
             
-        windows = service_client.table("safe_windows").select("*, profiles!safe_windows_user_id_fkey(full_name, phone)").in_("user_id", protected_user_ids).order("started_at", desc=True).execute()
-        return windows.data or []
+        if protected_user_id:
+            if protected_user_id not in protected_user_ids:
+                return []
+            protected_user_ids = [protected_user_id]
+            
+        # Fetch all, filter in Python to avoid enum case crashes and support normalize_profile
+        query = service_client.table("safe_windows").select("*, profiles!safe_windows_user_id_fkey(full_name, phone)").in_("user_id", protected_user_ids)
+        windows = query.order("started_at", desc=True).limit(limit).execute()
+        
+        result = []
+        for w in windows.data or []:
+            w["profiles"] = normalize_profile(w.get("profiles"))
+            
+            w_status = str(w.get("status") or "").lower()
+            if status and w_status != status.lower():
+                continue
+            if active_only and w_status not in ["active", "missed"]:
+                continue
+            result.append(w)
+            
+        return result
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
-        logger.error(f"Error fetching guardian safe windows: {str(e)}", exc_info=True)
+        logger.exception("get_guardian_safe_windows failed")
         raise HTTPException(status_code=500, detail="Could not fetch guardian safe windows")
 
 @router.get("/safe-windows/{window_id}", response_model=dict)
@@ -193,6 +493,10 @@ def get_guardian_safe_window(window_id: str, auth_data: dict = Depends(get_curre
         return window.data[0]
     except HTTPException:
         raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error fetching guardian safe window: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not fetch guardian safe window")
@@ -205,6 +509,10 @@ def delete_guardian_link(link_id: str, auth_data: dict = Depends(get_current_use
     try:
         result = service_client.table("guardian_links").delete().eq("id", link_id).eq("user_id", user.id).execute()
         return
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error deleting guardian link: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not delete guardian link")
@@ -315,6 +623,10 @@ def link_guardian(
     except HTTPException:
         raise
 
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(
             f"Error linking guardian: {str(e)}",
@@ -325,3 +637,163 @@ def link_guardian(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not link guardian"
         )
+
+from typing import Optional
+from pydantic import BaseModel
+from app.services.notification_service import notification_service
+
+class ActionRequest(BaseModel):
+    action_type: str
+    message: Optional[str] = None
+
+@router.post("/alerts/{alert_id}/actions")
+def create_guardian_action(alert_id: str, payload: ActionRequest, auth_data: dict = Depends(get_current_user)):
+    user = auth_data["user"]
+    service_client = get_service_role_client()
+
+    import uuid
+    try:
+        uuid.UUID(str(alert_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid alert_id format")
+
+    try:
+        # Check if alert exists
+        alert_res = service_client.table("sos_alerts").select("user_id, safe_window_id").eq("id", alert_id).execute()
+        if not alert_res.data:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        
+        protected_user_id = alert_res.data[0]["user_id"]
+        journey_id = alert_res.data[0].get("safe_window_id")
+
+        # Check guardian link
+        link_res = service_client.table("guardian_links").select("id").eq("guardian_user_id", user.id).eq("user_id", protected_user_id).eq("status", "ACTIVE").execute()
+        
+        if not link_res.data:
+            raise HTTPException(status_code=403, detail="Not authorized as active guardian")
+            
+        action_data = {
+            "alert_id": alert_id,
+            "guardian_user_id": user.id,
+            "protected_user_id": protected_user_id,
+            "journey_id": journey_id,
+            "action_type": payload.action_type,
+            "message": payload.message,
+            "status": "success",
+            "metadata": {}
+        }
+        
+        result = service_client.table("guardian_alert_actions").insert(action_data).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=500, detail="Failed to create action")
+            
+        if payload.action_type in ["RESOLVED", "FALSE_ALARM"]:
+            try:
+                service_client.table("sos_alerts").update({
+                    "status": "RESOLVED",
+                    "cancel_method": "GUARDIAN_" + payload.action_type
+                }).eq("id", alert_id).execute()
+            except httpx.TimeoutException:
+                raise
+            except httpx.RequestError:
+                raise
+            except Exception as e:
+                logger.warning(f"Failed to auto-resolve alert from action: {e}")
+
+        # Log timeline event
+        notification_service._log_event(
+            event_type="GUARDIAN_ACTION",
+            status="SUCCESS",
+            user_id=protected_user_id,
+            guardian_user_id=user.id,
+            alert_id=alert_id,
+            journey_id=journey_id,
+            message=payload.message or payload.action_type,
+            metadata={
+                "action_type": payload.action_type
+            }
+        )
+            
+        return result.data[0]
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating action: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not create action")
+
+@router.get("/alerts/{alert_id}/actions")
+def get_guardian_actions(alert_id: str, auth_data: dict = Depends(get_current_user)):
+    user = auth_data["user"]
+    service_client = get_service_role_client()
+
+    import uuid
+    try:
+        uuid.UUID(str(alert_id))
+    except ValueError:
+        return []
+
+    try:
+        # Check if alert exists
+        alert_res = service_client.table("sos_alerts").select("user_id").eq("id", alert_id).execute()
+        if not alert_res.data:
+            return []
+            
+        protected_user_id = alert_res.data[0]["user_id"]
+        
+        # Must be owner or active guardian
+        if protected_user_id != user.id:
+            link_res = service_client.table("guardian_links").select("id").eq("guardian_user_id", user.id).eq("user_id", protected_user_id).eq("status", "ACTIVE").execute()
+            if not link_res.data:
+                return []
+                
+        # Fetch actions without embedded profiles to avoid schema cache issues
+        result = service_client.table("guardian_alert_actions").select(
+            "id, action_type, message, status, created_at, guardian_user_id"
+        ).eq("alert_id", alert_id).order("created_at", desc=True).execute()
+        
+        actions = result.data or []
+        if not actions:
+            return []
+            
+        guardian_ids = list(set([a["guardian_user_id"] for a in actions if a.get("guardian_user_id")]))
+        profiles_map = {}
+        if guardian_ids:
+            try:
+                prof_res = service_client.table("profiles").select("id, full_name, email").in_("id", guardian_ids).execute()
+                for p in prof_res.data or []:
+                    profiles_map[p["id"]] = p
+            except httpx.TimeoutException:
+                raise
+            except httpx.RequestError:
+                raise
+            except Exception as e:
+                logger.warning(f"Failed to fetch profiles for actions: {e}")
+        
+        mapped = []
+        for row in actions:
+            prof = profiles_map.get(row.get("guardian_user_id"), {})
+            mapped.append({
+                "id": row["id"],
+                "alert_id": alert_id,
+                "guardian_user_id": row.get("guardian_user_id"),
+                "guardian_name": prof.get("full_name") or prof.get("email") or "Guardian",
+                "guardian_phone": prof.get("phone") or "",
+                "action_type": row["action_type"],
+                "message": row["message"],
+                "status": row["status"],
+                "created_at": row["created_at"]
+            })
+            
+        return mapped
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching actions: {e}", exc_info=True)
+        return []

@@ -1,9 +1,10 @@
 import React, { memo } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { GuardedUser, GuardianStatus } from '../../types/guardian';
 
 interface Props {
   user: GuardedUser;
+  onPress: (userId: string) => void;
 }
 
 const getStatusColor = (status: GuardianStatus) => {
@@ -16,12 +17,12 @@ const getStatusColor = (status: GuardianStatus) => {
   }
 };
 
-const GuardianUserCardComponent: React.FC<Props> = ({ user }) => {
+const GuardianUserCardComponent: React.FC<Props> = ({ user, onPress }) => {
   const statusColor = getStatusColor(user.status);
   const initial = user.name ? user.name.charAt(0).toUpperCase() : 'U';
 
   return (
-    <View style={styles.card}>
+    <TouchableOpacity style={styles.card} onPress={() => onPress(user.protectedUserId)} activeOpacity={0.8}>
       <View style={styles.avatarContainer}>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>{initial}</Text>
@@ -35,7 +36,7 @@ const GuardianUserCardComponent: React.FC<Props> = ({ user }) => {
         <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
         <Text style={[styles.statusText, { color: statusColor }]}>{user.status}</Text>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 };
 

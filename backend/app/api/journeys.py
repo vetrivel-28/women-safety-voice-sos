@@ -1,3 +1,4 @@
+import httpx
 import logging
 from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -87,16 +88,16 @@ def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user))
         )
         duration_minutes_int = max(1, math.ceil(duration_seconds_int / 60))
 
-        interval_secs_in = journey_in.get("check_in_interval_seconds")
+        ALLOWED_CHECKIN_MINUTES = {3, 5, 10}
+        
         interval_mins_in = journey_in.get("check_in_interval_minutes")
-
-        check_in_interval_seconds_int = (
-            int(interval_secs_in) if interval_secs_in is not None
-            else duration_seconds_int if duration_seconds_int <= 60
-            else int(float(interval_mins_in) * 60) if interval_mins_in is not None
-            else 300
-        )
-        check_in_interval_minutes_int = max(1, math.ceil(check_in_interval_seconds_int / 60))
+        
+        if interval_mins_in not in ALLOWED_CHECKIN_MINUTES:
+            check_in_interval_minutes_int = 5
+        else:
+            check_in_interval_minutes_int = interval_mins_in
+            
+        check_in_interval_seconds_int = check_in_interval_minutes_int * 60
             
         from datetime import timedelta
         ends_at = now + timedelta(seconds=duration_seconds_int)
@@ -106,6 +107,88 @@ def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user))
             
         assert check_in_due_at <= ends_at, "Check in due time must be <= ends at"
             
+        def validate_coord(lat, lng, label):
+            if lat is not None or lng is not None:
+                if lat is None or lng is None:
+                    raise ValueError(f"{label} latitude and longitude must both be provided")
+                try:
+                    lat_f = float(lat)
+                    lng_f = float(lng)
+                except (ValueError, TypeError):
+                    raise ValueError(f"{label} coordinates must be numeric")
+                if math.isnan(lat_f) or math.isnan(lng_f):
+                    raise ValueError(f"{label} coordinates cannot be NaN")
+                if not (-90 <= lat_f <= 90):
+                    raise ValueError(f"{label} latitude must be between -90 and 90")
+                if not (-180 <= lng_f <= 180):
+                    raise ValueError(f"{label} longitude must be between -180 and 180")
+                return lat_f, lng_f
+            return None, None
+            
+        try:
+            s_lat, s_lng = validate_coord(journey_in.get("start_latitude"), journey_in.get("start_longitude"), "Start")
+            d_lat, d_lng = validate_coord(journey_in.get("destination_latitude"), journey_in.get("destination_longitude"), "Destination")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+            
+        import os
+        import urllib.request
+        import json
+        
+        distance_km = None
+        estimated_duration_minutes = None
+        route_polyline = None
+        route_provider = "google"
+        route_status = "unavailable"
+        
+        if s_lat is not None and s_lng is not None and d_lat is not None and d_lng is not None:
+            api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+            routing_provider = os.getenv("ROUTING_PROVIDER")
+            
+            if not api_key or routing_provider == "osrm":
+                route_provider = "osrm"
+                osrm_base_url = os.getenv("OSRM_BASE_URL", "https://router.project-osrm.org")
+                try:
+                    url = f"{osrm_base_url}/route/v1/driving/{s_lng},{s_lat};{d_lng},{d_lat}?overview=false"
+                    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (SafeHer Backend)'})
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        data = json.loads(response.read().decode())
+                        if data.get("code") == "Ok" and data.get("routes"):
+                            route = data["routes"][0]
+                            dist_meters = route["distance"]
+                            dur_seconds = route["duration"]
+                            
+                            distance_km = round(dist_meters / 1000.0, 2)
+                            estimated_duration_minutes = max(1, math.ceil(dur_seconds / 60))
+                            route_status = "calculated"
+                        else:
+                            route_status = "unavailable"
+                except Exception as ex:
+                    logger.warning(f"Failed to fetch OSRM route ETA: {ex}")
+                    route_status = "unavailable"
+            else:
+                route_provider = "google"
+                try:
+                    url = f"https://maps.googleapis.com/maps/api/directions/json?origin={s_lat},{s_lng}&destination={d_lat},{d_lng}&key={api_key}"
+                    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        data = json.loads(response.read().decode())
+                        if data.get("status") == "OK" and data.get("routes"):
+                            route = data["routes"][0]
+                            leg = route["legs"][0]
+                            dist_meters = leg["distance"]["value"]
+                            dur_seconds = leg["duration"]["value"]
+                            
+                            distance_km = round(dist_meters / 1000.0, 2)
+                            estimated_duration_minutes = max(1, math.ceil(dur_seconds / 60))
+                            route_polyline = route.get("overview_polyline", {}).get("points")
+                            route_status = "calculated"
+                        else:
+                            route_status = "api_error"
+                except Exception as ex:
+                    logger.warning(f"Failed to fetch Google route ETA: {ex}")
+                    route_status = "api_error"
+            
         journey_data = {
             "user_id": user.id,
             "status": "active",
@@ -113,16 +196,25 @@ def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user))
             "duration_seconds": duration_seconds_int,
             "check_in_interval_minutes": check_in_interval_minutes_int,
             "check_in_interval_seconds": check_in_interval_seconds_int,
-            "start_latitude": journey_in.get("start_latitude"),
-            "start_longitude": journey_in.get("start_longitude"),
+            "start_latitude": s_lat,
+            "start_longitude": s_lng,
             "start_address": journey_in.get("start_address") or journey_in.get("from"),
-            "destination_latitude": journey_in.get("destination_latitude"),
-            "destination_longitude": journey_in.get("destination_longitude"),
+            "destination_latitude": d_lat,
+            "destination_longitude": d_lng,
             "destination_address": journey_in.get("destination_address") or journey_in.get("destination") or journey_in.get("to"),
+            "start_place_id": journey_in.get("start_place_id"),
+            "destination_place_id": journey_in.get("destination_place_id"),
+            "location_provider": journey_in.get("location_provider"),
             "started_at": now.isoformat().replace("+00:00", "Z"),
             "ends_at": ends_at.isoformat().replace("+00:00", "Z"),
             "last_check_in_at": now.isoformat().replace("+00:00", "Z"),
-            "check_in_due_at": check_in_due_at.isoformat().replace("+00:00", "Z")
+            "check_in_due_at": check_in_due_at.isoformat().replace("+00:00", "Z"),
+            "distance_km": distance_km,
+            "estimated_duration_minutes": estimated_duration_minutes,
+            "estimated_arrival_at": (now + timedelta(minutes=estimated_duration_minutes)).isoformat().replace("+00:00", "Z") if estimated_duration_minutes else None,
+            "route_polyline": route_polyline,
+            "route_provider": route_provider,
+            "route_status": route_status
         }
         
         result = supabase.table("safe_windows").insert(journey_data).execute()
@@ -134,6 +226,10 @@ def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user))
 
         return result.data[0]
     except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
         raise
     except Exception as e:
         # Catch unique index violation race condition
@@ -155,6 +251,10 @@ def get_journeys(auth_data: dict = Depends(get_current_user)):
         print(f"GET /api/journeys row count: {len(result.data) if result.data else 0}")
         
         return result.data
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error fetching journeys: {str(e)}", exc_info=True)
         raise HTTPException(status_code=503, detail={"error": "Database unavailable", "message": str(e)})
@@ -179,6 +279,10 @@ def complete_journey(journey_id: str, auth_data: dict = Depends(get_current_user
             return existing.data[0] # already completed/missed
         return result.data[0]
     except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
         raise
     except Exception as e:
         logger.error(f"Error completing journey: {str(e)}", exc_info=True)
@@ -238,6 +342,10 @@ def check_in_journey(journey_id: str, auth_data: dict = Depends(get_current_user
         return result.data[0] if result.data else journey
     except HTTPException:
         raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error checking in: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -249,10 +357,8 @@ def handle_missed_checkin(journey_id: str, auth_data: dict = Depends(get_current
 
     try:
         now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        # Mark journey as missed atomically
+        # Mark journey missed check-in atomically without ending it
         update_res = service_client.table("safe_windows").update({
-            "status": "missed",
-            "missed_at": now_str,
             "missed_check_in_at": now_str
         }).eq("id", journey_id).eq("user_id", user.id).eq("status", "active").execute()
         
@@ -265,6 +371,23 @@ def handle_missed_checkin(journey_id: str, auth_data: dict = Depends(get_current
             return {"success": True, "safe_window": journey, "alert": None, "guardian_notified": False, "reason": "Already processed"}
             
         journey = update_res.data[0]
+        
+        # Log SAFE_WINDOW_MISSED
+        try:
+            notification_service._log_event(
+                alert_id=None,
+                user_id=user.id,
+                event_type="SAFE_WINDOW_MISSED",
+                status="SUCCESS",
+                message="Journey check-in missed",
+                journey_id=journey_id
+            )
+        except httpx.TimeoutException:
+            raise
+        except httpx.RequestError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to log SAFE_WINDOW_MISSED: {e}")
         
         # Check if SOS alert already exists to prevent duplicate
         sos_existing = service_client.table("sos_alerts").select("id").eq("safe_window_id", journey_id).eq("trigger_type", "JOURNEY_MISSED_CHECKIN").execute()
@@ -307,6 +430,13 @@ def handle_missed_checkin(journey_id: str, auth_data: dict = Depends(get_current
                          "long": journey.get("start_longitude")
                      }
                 try:
+                    notification_service.send_sos_sms_to_emergency_contacts(
+                        user_id=user.id,
+                        alert_id=alert_data["id"],
+                        alert_payload={"id": alert_data["id"], "trigger_type": "JOURNEY_MISSED_CHECKIN", "location": location},
+                        user=user
+                    )
+                    
                     notification_service.notify_all_guardians(
                         user_id=user.id,
                         alert_type="JOURNEY_MISSED_CHECKIN",
@@ -327,6 +457,10 @@ def handle_missed_checkin(journey_id: str, auth_data: dict = Depends(get_current
             "guardian_notified": guardian_notified,
             "reason": reason
         }
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error handling missed checkin: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -338,11 +472,14 @@ def update_location(journey_id: str, location_in: dict, auth_data: dict = Depend
     supabase = get_service_role_client()
 
     try:
+        from datetime import datetime
         update_data = {
             "current_latitude": location_in.get("latitude") or location_in.get("current_latitude"),
             "current_longitude": location_in.get("longitude") or location_in.get("current_longitude"),
             "current_address": location_in.get("address") or location_in.get("current_address"),
-            "last_location_at": datetime.utcnow().isoformat()
+            "location_accuracy": location_in.get("accuracy"),
+            "location_provider": location_in.get("provider"),
+            "last_location_at": location_in.get("captured_at") or datetime.utcnow().isoformat()
         }
         
         # Remove None values
@@ -352,6 +489,12 @@ def update_location(journey_id: str, location_in: dict, auth_data: dict = Depend
         if not result.data:
             raise HTTPException(status_code=404, detail="Journey not found")
         return result.data[0]
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error updating journey location: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail="Service unavailable (Supabase failure)")

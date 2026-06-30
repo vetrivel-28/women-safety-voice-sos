@@ -23,6 +23,9 @@ interface DashboardCache {
 let globalCache: DashboardCache = { data: null, timestamp: 0 };
 let globalFetchPromise: Promise<void> | null = null;
 
+let consecutiveErrors = 0;
+let networkDownUntil = 0;
+
 export const useGuardianDashboard = () => {
   const [model, setModel] = useState<GuardianDashboardModel>(
     globalCache.data || {
@@ -46,7 +49,6 @@ export const useGuardianDashboard = () => {
     journeys.forEach(j => {
       const name = j.profiles?.full_name || 'User';
       
-      // Journey Started
       if (j.started_at) {
         events.push({
           id: `j_start_${j.id}`,
@@ -59,13 +61,12 @@ export const useGuardianDashboard = () => {
         });
       }
       
-      // Journey Completed
       if (j.status === 'COMPLETED' && j.ends_at) {
         events.push({
           id: `j_comp_${j.id}`,
           user_id: j.user_id,
           type: 'JOURNEY_COMPLETED',
-          timestamp: j.ends_at, // Approximation for completion time
+          timestamp: j.ends_at,
           title: 'Journey Completed',
           description: `${name} reached their destination safely.`,
           isEmergency: false,
@@ -106,17 +107,13 @@ export const useGuardianDashboard = () => {
     activeAlerts: GuardianAlert[]
   ): GuardianStatus => {
     const userAlerts = activeAlerts.filter(a => a.user_id === userId && a.status === 'ACTIVE');
-    if (userAlerts.length > 0) {
-      // Prioritize explicit SOS alerts
-      return 'SOS ACTIVE';
-    }
+    if (userAlerts.length > 0) return 'SOS ACTIVE';
 
     const userJourneys = activeJourneys.filter(j => j.user_id === userId && j.status === 'ACTIVE');
     if (userJourneys.length > 0) {
       const activeJourney = userJourneys[0];
       const now = new Date().getTime();
       
-      // Check if check-in is pending/missed but SOS not yet populated/fetched
       if (activeJourney.check_in_due_at && new Date(activeJourney.check_in_due_at).getTime() < now) {
         return 'CHECK-IN MISSED';
       }
@@ -126,8 +123,13 @@ export const useGuardianDashboard = () => {
     return 'SAFE';
   };
 
-  const fetchDashboardData = useCallback(async (forceRefresh = false) => {
+  const fetchDashboardData = useCallback(async (forceRefresh = false, signal?: AbortSignal) => {
     const now = Date.now();
+    
+    if (now < networkDownUntil && !forceRefresh) {
+      return; // In backoff period
+    }
+
     if (!forceRefresh && globalCache.data && (now - globalCache.timestamp < CACHE_TTL_MS)) {
       setModel(prev => ({ ...globalCache.data!, isLoading: false, isRefreshing: false }));
       return;
@@ -141,95 +143,117 @@ export const useGuardianDashboard = () => {
       return;
     }
 
-    // Don't flash 'isLoading' to true if we already have data (stale-while-revalidate fix)
     setModel(prev => ({ ...prev, isRefreshing: forceRefresh, isLoading: !globalCache.data && !forceRefresh, error: null }));
 
     const doFetch = async () => {
       try {
-        // Fetch endpoints concurrently
-      const [watchingRes, alertsRes, windowsRes] = await Promise.allSettled([
-        apiClient.get('/api/guardians/watching'),
-        apiClient.get('/api/guardians/alerts'),
-        apiClient.get('/api/guardians/safe-windows')
-      ]);
+        let partialError = false;
+        let isNetworkError = false;
 
-      let partialError = false;
+        const [dashboardRes, alertsRes, journeysRes] = await Promise.all([
+          apiClient.get('/api/guardians/dashboard', { signal }).catch(e => {
+            if (e.isNetworkError) isNetworkError = true;
+            return { data: null, error: e };
+          }),
+          apiClient.get('/api/guardians/alerts?active_only=true', { signal }).catch(() => ({ data: [] })),
+          apiClient.get('/api/guardians/safe-windows?active_only=true', { signal }).catch(() => ({ data: [] }))
+        ]);
 
-      // Handle watching users
-      const rawWatching = watchingRes.status === 'fulfilled' ? watchingRes.value.data : [];
-      if (watchingRes.status === 'rejected') partialError = true;
+        const rawDashboard = dashboardRes.data || [];
+        if (!dashboardRes.data) {
+          partialError = true;
+        }
 
-      // Handle alerts
-      const rawAlerts: GuardianAlert[] = alertsRes.status === 'fulfilled' ? alertsRes.value.data : [];
-      if (alertsRes.status === 'rejected') partialError = true;
+        if (partialError) {
+          if (isNetworkError) {
+            consecutiveErrors += 1;
+            if (consecutiveErrors >= 2) {
+              networkDownUntil = Date.now() + 30000; // 30s backoff
+            }
+          }
+          if (globalCache.data) {
+            setModel({
+              ...globalCache.data,
+              isLoading: false,
+              isRefreshing: false,
+              error: isNetworkError ? 'Cannot reach backend. Check that the backend is running on the same network.' : 'Some data is temporarily unavailable.'
+            });
+            return;
+          }
+        } else {
+          consecutiveErrors = 0;
+          networkDownUntil = 0;
+        }
 
-      // Handle journeys
-      const rawJourneys: GuardianJourney[] = windowsRes.status === 'fulfilled' ? windowsRes.value.data : [];
-      if (windowsRes.status === 'rejected') partialError = true;
+        const activeAlerts: GuardianAlert[] = alertsRes.data || [];
+        const activeJourneys: GuardianJourney[] = journeysRes.data || [];
 
-      // Stale-While-Revalidate: If we have existing successful data, do not overwrite it with partial data
-      if (partialError && globalCache.data) {
-        setModel({
-          ...globalCache.data,
+        const guardedUsers: GuardedUser[] = [];
+        rawDashboard.forEach((w: any) => {
+          const userId = w.protectedUserId || w.protected_user_id || w.user_id || w.id;
+          
+          if (!userId) {
+            console.warn('[GuardianDashboard] Missing protected user id in dashboard item:', w);
+            return;
+          }
+          
+          let status: GuardianStatus = 'SAFE';
+          if (w.active_alerts > 0) {
+            status = 'SOS ACTIVE';
+          } else if (w.active_journeys > 0) {
+            status = 'JOURNEY ACTIVE';
+          }
+
+          guardedUsers.push({
+            protectedUserId: userId,
+            name: w.name,
+            email: w.email,
+            phone: w.phone,
+            status,
+            active_alerts: w.active_alerts,
+            active_journeys: w.active_journeys,
+            last_activity: w.last_activity,
+            last_location: w.last_location,
+          });
+        });
+
+
+
+        const severityMap = {
+          'SOS ACTIVE': 0,
+          'CHECK-IN MISSED': 1,
+          'JOURNEY ACTIVE': 2,
+          'SAFE': 3
+        };
+        guardedUsers.sort((a, b) => severityMap[a.status] - severityMap[b.status]);
+
+        const recentActivity: ActivityEvent[] = normalizeActivities(activeJourneys, activeAlerts);
+
+        const newData: GuardianDashboardModel = {
+          guardedUsers,
+          activeJourneys,
+          activeAlerts,
+          recentActivity,
+          lastUpdated: new Date().toISOString(),
           isLoading: false,
           isRefreshing: false,
-          error: 'Unable to refresh. Showing previously loaded data.'
-        });
-        return;
-      }
-
-      // Ensure rawAlerts is sorted by created_at DESC (API should do this, but just in case)
-      rawAlerts.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-      // Only take the NEWEST active alert per user
-      const seenActiveUsers = new Set<string>();
-      const activeAlerts = rawAlerts.filter(a => {
-        if (a.status !== 'ACTIVE') return false;
-        if (seenActiveUsers.has(a.user_id)) return false;
-        seenActiveUsers.add(a.user_id);
-        return true;
-      });
-
-      const activeJourneys = rawJourneys.filter(j => j.status === 'ACTIVE');
-
-      const guardedUsers: GuardedUser[] = rawWatching.map((w: any) => {
-        const userId = w.protected_user_id;
-        return {
-          id: userId,
-          name: w.name,
-          email: w.email,
-          phone: w.phone,
-          status: deriveStatus(userId, activeJourneys, activeAlerts)
+          error: partialError ? (isNetworkError ? 'Cannot reach backend. Check that the backend is running on the same network.' : 'Some data is temporarily unavailable.') : null,
         };
-      });
 
-      const recentActivity = normalizeActivities(rawJourneys, rawAlerts);
+        globalCache = { data: newData, timestamp: Date.now() };
+        setModel(newData);
+      } catch (e: any) {
+        if (e.name === 'CanceledError' || e.name === 'AbortError') return;
+        setModel(prev => ({
+          ...prev,
+          isLoading: false,
+          isRefreshing: false,
+          error: prev.lastUpdated ? 'Unable to refresh. Showing cached data.' : 'Unable to load Guardian Dashboard.',
+        }));
+      }
+    };
 
-      const newData: GuardianDashboardModel = {
-        guardedUsers,
-        activeJourneys,
-        activeAlerts,
-        recentActivity,
-        lastUpdated: new Date().toISOString(),
-        isLoading: false,
-        isRefreshing: false,
-        error: partialError ? 'Some data is temporarily unavailable.' : null,
-      };
-
-      globalCache = { data: newData, timestamp: Date.now() };
-      setModel(newData);
-    } catch (e: any) {
-      // Only reach here if something entirely catastrophic happened (not API rejection)
-      setModel(prev => ({
-        ...prev,
-        isLoading: false,
-        isRefreshing: false,
-        error: prev.lastUpdated ? 'Unable to refresh. Showing cached data.' : 'Unable to load Guardian Dashboard.',
-      }));
-    }
-  };
-
-  globalFetchPromise = doFetch();
+    globalFetchPromise = doFetch();
     try {
       await globalFetchPromise;
     } finally {
@@ -237,31 +261,55 @@ export const useGuardianDashboard = () => {
     }
   }, []);
 
-  // Poll when screen is focused
   useFocusEffect(
     useCallback(() => {
       isFocusedRef.current = true;
-      fetchDashboardData(false);
+      const abortController = new AbortController();
+      
+      let timeoutId: NodeJS.Timeout;
+      let isActive = true;
 
-      const intervalId = setInterval(() => {
-        if (isFocusedRef.current && appStateRef.current === 'active') {
-          fetchDashboardData(false);
+      const poll = async () => {
+        if (!isActive || !isFocusedRef.current || appStateRef.current !== 'active') return;
+
+        const hasIncident = globalCache.data?.activeAlerts?.length || globalCache.data?.activeJourneys?.length;
+        const currentInterval = hasIncident ? 5000 : 30000; // 5s for emergency, 30s normal
+        
+        const timeSinceLastFetch = Date.now() - globalCache.timestamp;
+        if (timeSinceLastFetch >= currentInterval) {
+          await fetchDashboardData(true, abortController.signal).catch(() => {});
         }
-      }, POLL_INTERVAL_MS);
+
+        if (isActive) {
+          timeoutId = setTimeout(poll, 5000);
+        }
+      };
+
+      // Start initial fetch/poll on focus
+      fetchDashboardData(true, abortController.signal).then(() => {
+        if (isActive) {
+          timeoutId = setTimeout(poll, 5000);
+        }
+      });
 
       return () => {
+        isActive = false;
         isFocusedRef.current = false;
-        clearInterval(intervalId);
+        clearTimeout(timeoutId);
+        abortController.abort();
       };
     }, [fetchDashboardData])
   );
 
-  // App state listener (background/foreground)
+  // AppState listener (background/foreground)
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
       appStateRef.current = nextAppState;
       if (nextAppState === 'active' && isFocusedRef.current) {
-        fetchDashboardData(false);
+        const timeSinceLastFetch = Date.now() - globalCache.timestamp;
+        if (timeSinceLastFetch >= 5000) {
+          fetchDashboardData(true).catch(() => {});
+        }
       }
     });
 
@@ -279,7 +327,7 @@ export const useGuardianDashboard = () => {
       // Re-evaluate statuses for affected users
       const updatedUsers = prev.guardedUsers.map(u => ({
         ...u,
-        status: deriveStatus(u.id, prev.activeJourneys, updatedAlerts)
+        status: deriveStatus(u.protectedUserId, prev.activeJourneys, updatedAlerts)
       }));
 
       const newData = { ...prev, activeAlerts: updatedAlerts, guardedUsers: updatedUsers };

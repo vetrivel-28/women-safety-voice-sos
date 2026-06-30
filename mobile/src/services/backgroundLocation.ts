@@ -7,7 +7,7 @@ const backgroundTask = async (taskDataArguments: any) => {
     await new Promise<void>(async (resolve) => {
         // Keep the JS thread alive while the service is running.
         // The actual polling logic happens in SafeWindowContext's setInterval.
-        for (let i = 0; BackgroundService.isRunning(); i++) {
+        for (let i = 0; BackgroundService && typeof BackgroundService.isRunning === 'function' && BackgroundService.isRunning(); i++) {
             await sleep(delay);
         }
     });
@@ -30,27 +30,27 @@ const options = {
 
 export const startBackgroundLocationService = async () => {
     try {
-        if (!BackgroundService || typeof BackgroundService.start !== 'function') {
+        if (!BackgroundService || typeof BackgroundService !== 'object' || !BackgroundService.start || !BackgroundService.isRunning) {
             console.log("Background service unavailable in Expo Go; using foreground timer.");
             return;
         }
-        if (!BackgroundService.isRunning()) {
+        if (typeof BackgroundService.isRunning === 'function' && !BackgroundService.isRunning()) {
             await BackgroundService.start(backgroundTask, options);
         }
     } catch (e) {
-        console.warn("BackgroundService start error", e);
+        console.log("BackgroundService start error", e);
     }
 };
 
 export const stopBackgroundLocationService = async () => {
     try {
-        if (!BackgroundService || typeof BackgroundService.stop !== 'function') {
+        if (!BackgroundService || typeof BackgroundService !== 'object' || !BackgroundService.stop || !BackgroundService.isRunning) {
             return;
         }
-        if (BackgroundService.isRunning()) {
+        if (typeof BackgroundService.isRunning === 'function' && BackgroundService.isRunning()) {
             await BackgroundService.stop();
         }
     } catch (e) {
-        console.warn("BackgroundService stop error", e);
+        console.log("BackgroundService stop error", e);
     }
 };

@@ -1,11 +1,12 @@
+import { SafeAreaView } from 'react-native-safe-area-context';
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Platform, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Alert } from 'react-native';
 import { useSafeWindow } from '../context/SafeWindowContext';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SectionHeader } from '../components/SectionHeader';
 import { getCurrentLocationForAlert } from '../utils/location';
-import { searchPlaces, geocodePlace, PlaceResult } from '../services/geocodingService';
-import { formatDistance } from '../utils/geoUtils';
+import { searchPlaces, geocodePlace, reverseGeocode, PlaceResult, isUsingNominatim } from '../services/geocodingService';
+import { formatDistance, distanceBetweenPointsMeters } from '../utils/geoUtils';
 
 export const SafeWindowScreen: React.FC = () => {
   const { safeWindow, startSafeWindow, endSafeWindow, getRemainingSeconds, getCheckInRemainingSeconds, markCheckInSafe, distanceToDestination, resumeRoute, cancelDeviationWarning, batteryOptimizationDenied, openBatterySettings, isStartingJourney } = useSafeWindow();
@@ -14,11 +15,18 @@ export const SafeWindowScreen: React.FC = () => {
   const [checkInTimeLeft, setCheckInTimeLeft] = useState(getCheckInRemainingSeconds());
   const [warningTimeLeft, setWarningTimeLeft] = useState(0);
   
-  const [fromQuery, setFromQuery] = useState('Current Location');
+  const CHECKIN_OPTIONS = [3, 5, 10] as const;
+  const [checkInMinutes, setCheckInMinutes] = useState<3 | 5 | 10>(5);
+  
+  const [useCurrentLocation, setUseCurrentLocation] = useState(true);
+  const [fromQuery, setFromQuery] = useState('');
+  const [startPlace, setStartPlace] = useState<PlaceResult | null>(null);
   const [toQuery, setToQuery] = useState('');
   
   const [searchResults, setSearchResults] = useState<PlaceResult[]>([]);
-  const [selectedPlace, setSelectedPlace] = useState<PlaceResult | null>(null);
+  const [searchTarget, setSearchTarget] = useState<'from' | 'to' | null>(null);
+  
+  const [destPlace, setDestPlace] = useState<PlaceResult | null>(null);
   
   const [isStarting, setIsStarting] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -50,37 +58,80 @@ export const SafeWindowScreen: React.FC = () => {
     };
   }, [safeWindow.status, safeWindow.endsAt, safeWindow.checkInDueAt, getRemainingSeconds, getCheckInRemainingSeconds]);
 
-  const handleSearch = async (text: string) => {
-    setToQuery(text);
+  const handleSearch = async (text: string, type: 'from' | 'to') => {
+    if (type === 'to') setToQuery(text);
+    else setFromQuery(text);
+    setSearchTarget(type);
     
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
     }
+    
     if (text.length > 2) {
       setIsSearching(true);
+      setErrorBanner(null);
       searchTimeoutRef.current = setTimeout(async () => {
         try {
-          const results = await searchPlaces(text);
+          let currentLoc;
+          try {
+            const locData = await getCurrentLocationForAlert();
+            if (locData && !locData.permissionDenied) {
+              currentLoc = { latitude: locData.latitude, longitude: locData.longitude };
+            }
+          } catch (e) {}
+          
+          const results = await searchPlaces(text, currentLoc);
+          if (results.length === 0) {
+            setErrorBanner("No locations found.");
+          }
           setSearchResults(results);
+        } catch (e: any) {
+          if (e.message === "Google Maps API key not configured") {
+             if (!isUsingNominatim) {
+                 setErrorBanner("Google Maps API key not configured.");
+             }
+          } else {
+             setErrorBanner("Location search unavailable.");
+          }
         } finally {
           setIsSearching(false);
         }
-      }, 1000); // 1-second debounce to respect Nominatim limits
+      }, 1000); // 1-second debounce
     } else {
       setSearchResults([]);
       setIsSearching(false);
     }
   };
 
-  const handleSelectPlace = (place: PlaceResult) => {
-    setSelectedPlace(place);
-    setToQuery(place.name);
-    setSearchResults([]);
+  const isWithinTamilNadu = (lat: number, lon: number): boolean => {
+    return lat >= 8.0 && lat <= 13.7 && lon >= 76.0 && lon <= 80.5;
   };
 
-  const clearSelection = () => {
-    setSelectedPlace(null);
-    setToQuery('');
+  const handleSelectPlace = (place: PlaceResult) => {
+    if (place.latitude && place.longitude && !isWithinTamilNadu(place.latitude, place.longitude)) {
+      Alert.alert('Outside Service Area', 'For this demo, please select a location inside Tamil Nadu.');
+      return;
+    }
+    
+    if (searchTarget === 'to') {
+      setDestPlace(place);
+      setToQuery(place.name);
+    } else {
+      setStartPlace(place);
+      setFromQuery(place.name);
+    }
+    setSearchResults([]);
+    setSearchTarget(null);
+  };
+
+  const clearSelection = (type: 'from' | 'to') => {
+    if (type === 'to') {
+      setDestPlace(null);
+      setToQuery('');
+    } else {
+      setStartPlace(null);
+      setFromQuery('');
+    }
   };
 
   const formatTime = (seconds: number) => {
@@ -89,28 +140,67 @@ export const SafeWindowScreen: React.FC = () => {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
-  const handleStart = async (minutes: 15|30|60|0.5) => {
+  const handleStart = async (minutes: 15|30|60|0.5, forceStart: boolean = false) => {
     setIsStarting(true);
     setErrorBanner(null);
     let startLoc, destLoc;
-    const locData = await getCurrentLocationForAlert();
-    if (locData && !locData.permissionDenied) {
-      startLoc = { latitude: locData.latitude, longitude: locData.longitude };
+    
+    // Start Location Resolution
+    if (useCurrentLocation) {
+      const locData = await getCurrentLocationForAlert(true); // fast mode
+      if (locData && !locData.permissionDenied) {
+        reverseGeocode(locData.latitude, locData.longitude).catch(() => {});
+        startLoc = { latitude: locData.latitude, longitude: locData.longitude, address: "Current Location" };
+        if (!isWithinTamilNadu(locData.latitude, locData.longitude)) {
+          Alert.alert('Location Warning', 'Your current GPS location appears to be outside Tamil Nadu. SafeHer demo requires Tamil Nadu locations.');
+        } else if ((locData as any).accuracy && (locData as any).accuracy > 100) {
+          Alert.alert('Location Warning', 'GPS accuracy is currently low. Your journey will start, but the exact start location may be inaccurate.');
+        }
+      } else {
+        Alert.alert('Location Warning', 'Location permission denied. Journey can start but exact start location is unavailable.');
+      }
+    } else if (startPlace) {
+      const coords = await geocodePlace(startPlace.id);
+      if (coords) {
+         startLoc = { ...coords, address: startPlace.name, placeId: startPlace.id, provider: startPlace.provider };
+      } else {
+         startLoc = { latitude: startPlace.latitude!, longitude: startPlace.longitude!, address: startPlace.name, placeId: startPlace.id, provider: startPlace.provider };
+      }
     } else {
-      Alert.alert('Location Warning', 'Location permission denied. Journey can start but exact start location is unavailable.');
+      Alert.alert('Missing Location', 'Please select a starting location.');
+      setIsStarting(false);
+      return;
     }
     
-    if (selectedPlace) {
-      const coords = await geocodePlace(selectedPlace.id);
+    if (destPlace) {
+      const coords = await geocodePlace(destPlace.id);
       if (coords) {
-         destLoc = coords;
+         destLoc = { ...coords, address: destPlace.name, placeId: destPlace.id, provider: destPlace.provider };
       } else {
-         destLoc = { latitude: selectedPlace.latitude, longitude: selectedPlace.longitude };
+         destLoc = { latitude: destPlace.latitude!, longitude: destPlace.longitude!, address: destPlace.name, placeId: destPlace.id, provider: destPlace.provider };
+      }
+      
+      // Far-destination guard (100km)
+      if (!forceStart && startLoc && startLoc.latitude && startLoc.longitude && destLoc.latitude && destLoc.longitude) {
+        const dist = distanceBetweenPointsMeters(startLoc.latitude, startLoc.longitude, destLoc.latitude, destLoc.longitude);
+        if (dist > 100000) {
+          setErrorBanner("Destination is too far away (> 100km).");
+          setIsStarting(false);
+          Alert.alert(
+            "Far Destination",
+            "Destination is over 100km away. Do you want to start anyway?",
+            [
+              { text: "Choose another destination", style: "cancel" },
+              { text: "Start anyway", onPress: () => handleStart(minutes, true) }
+            ]
+          );
+          return;
+        }
       }
     }
     
     try {
-      await startSafeWindow(minutes, startLoc, destLoc);
+      await startSafeWindow(minutes, checkInMinutes, startLoc, destLoc);
     } catch (e: any) {
       setErrorBanner(e.message || 'Could not start journey. Please try again.');
     } finally {
@@ -159,9 +249,9 @@ export const SafeWindowScreen: React.FC = () => {
                       safeWindow.status === 'ACTIVE' ? styles.badgeActive : 
                       styles.badgeError]}>
                     <Text style={[styles.statusText, 
-                        safeWindow.status === 'ACTIVE' ? styles.textActive : 
+                        safeWindow.status === 'ACTIVE' ? (safeWindow.missedCheckInAt ? styles.textError : styles.textActive) : 
                         styles.textError]}>
-                      {safeWindow.status === 'ACTIVE' ? 'Active Tracking' : 'Missed Check-in'}
+                      {safeWindow.status === 'ACTIVE' ? (safeWindow.missedCheckInAt ? 'Active (Missed Check-in)' : 'Active Tracking') : 'Ended'}
                     </Text>
                   </View>
                 </View>
@@ -169,6 +259,14 @@ export const SafeWindowScreen: React.FC = () => {
 
               {safeWindow.status === 'ACTIVE' ? (
                 <View style={styles.activeSection}>
+                  
+                  {safeWindow.missedCheckInAt && (
+                    <View style={[styles.warningBox, {borderColor: '#DC2626', backgroundColor: '#FEF2F2'}]}>
+                      <Text style={[styles.warningTitle, {color: '#DC2626'}]}>⚠️ Check-in missed</Text>
+                      <Text style={styles.warningText}>Guardians have been notified. Journey is still active. Please check in below.</Text>
+                    </View>
+                  )}
+
                   <View style={styles.timerCircle}>
                     <Text style={styles.countdownTitle}>Window Time</Text>
                     <Text style={styles.countdown}>{formatTime(timeLeft)}</Text>
@@ -192,18 +290,35 @@ export const SafeWindowScreen: React.FC = () => {
                      </View>
                   </View>
 
-                  {safeWindow.destinationLocation && (
-                    <View style={styles.routeCard}>
-                       <View style={styles.routeHeader}>
-                          <Text style={styles.routeIcon}>📍</Text>
-                          <Text style={styles.routeTitle}>Route Tracking Active</Text>
-                       </View>
+                  <View style={styles.routeCard}>
+                     <View style={styles.routeHeader}>
+                        <Text style={styles.routeIcon}>📍</Text>
+                        <Text style={styles.routeTitle}>Route Tracking</Text>
+                     </View>
+                     
+                     {!safeWindow.destinationLocation ? (
+                        <Text style={styles.routeText}>Destination not selected.</Text>
+                     ) : (
+                       <View>
+
                        
-                       {distanceToDestination !== null && distanceToDestination !== undefined ? (
-                           <Text style={styles.routeText}>Distance to destination: <Text style={{fontWeight: 'bold'}}>{formatDistance(distanceToDestination)}</Text></Text>
-                       ) : (
-                           <Text style={styles.routeText}>Route tracking unavailable for this journey</Text>
-                       )}
+                       {safeWindow.route_status === 'calculated' || safeWindow.route_status === 'ok' ? (
+                         safeWindow.distance_km != null && safeWindow.estimated_duration_minutes != null ? (
+                           <View>
+                             <Text style={styles.routeText}>Distance: <Text style={{fontWeight: 'bold'}}>{safeWindow.distance_km} km</Text></Text>
+                             <Text style={styles.routeText}>ETA: <Text style={{fontWeight: 'bold'}}>{safeWindow.estimated_duration_minutes} min</Text></Text>
+                             {safeWindow.estimated_arrival_at && (
+                               <Text style={styles.routeText}>Expected arrival: <Text style={{fontWeight: 'bold'}}>{new Date(safeWindow.estimated_arrival_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</Text></Text>
+                             )}
+                           </View>
+                         ) : null
+                       ) : safeWindow.route_status === 'approximate' ? (
+                           safeWindow.distance_km != null ? (
+                               <Text style={styles.routeText}>Distance: <Text style={{fontWeight: 'bold'}}>~{safeWindow.distance_km} km</Text> (approximate)</Text>
+                           ) : null
+                       ) : safeWindow.route_status === 'unavailable' || safeWindow.route_status === 'api_error' || safeWindow.route_status === 'api_key_missing' ? (
+                           null
+                       ) : null}
                        
                        {safeWindow.routeDeviationWarningAt && !safeWindow.routeDeviationDetected && (
                          <View style={styles.warningBox}>
@@ -229,8 +344,9 @@ export const SafeWindowScreen: React.FC = () => {
                            <Text style={styles.deviationText}>Deviation Detected! Immediate check-in required.</Text>
                          </View>
                        )}
-                    </View>
-                  )}
+                      </View>
+                     )}
+                  </View>
 
                   <PrimaryButton title={isCompleting ? "Ending..." : "End Journey"} variant="outline" onPress={handleEnd} disabled={isCompleting} style={styles.endBtn} />
                 </View>
@@ -256,36 +372,92 @@ export const SafeWindowScreen: React.FC = () => {
               )}
               <View style={styles.card}>
                 <SectionHeader title="Route Setup" subtitle="Let SafeHer monitor your journey." />
-                
+                {isUsingNominatim && (
+                  <Text style={{ fontSize: 12, color: '#64748B', fontStyle: 'italic', marginBottom: 10, textAlign: 'center' }}>
+                    Using OpenStreetMap location search.
+                  </Text>
+                )}
                 <View style={styles.routeForm}>
                   <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>From</Text>
-                    <TextInput 
-                      style={[styles.searchInput, styles.readOnlyInput]} 
-                      value={fromQuery} 
-                      editable={false}
-                    />
+                    <View style={{flexDirection: 'row', marginBottom: 8}}>
+                       <TouchableOpacity onPress={() => setUseCurrentLocation(true)} style={[styles.chip, useCurrentLocation && styles.chipSelected, {flex: 1, marginRight: 4}]}>
+                         <Text style={useCurrentLocation ? styles.chipTextSelected : styles.chipText}>Current Location</Text>
+                       </TouchableOpacity>
+                       <TouchableOpacity onPress={() => setUseCurrentLocation(false)} style={[styles.chip, !useCurrentLocation && styles.chipSelected, {flex: 1, marginLeft: 4}]}>
+                         <Text style={!useCurrentLocation ? styles.chipTextSelected : styles.chipText}>Manual Search</Text>
+                       </TouchableOpacity>
+                    </View>
+                    
+                    {useCurrentLocation ? (
+                      <View style={styles.selectedPlaceCard}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.selectedPlaceName}>📍 Current Location</Text>
+                          <Text style={styles.selectedPlaceDesc}>Using GPS</Text>
+                        </View>
+                      </View>
+                    ) : (
+                      !startPlace ? (
+                        <View>
+                          <TextInput 
+                            style={styles.searchInput} 
+                            placeholder="Search starting location..." 
+                            placeholderTextColor="#94A3B8" 
+                            value={fromQuery} 
+                            onChangeText={(t) => handleSearch(t, 'from')}
+                            onFocus={() => {
+                              if (fromQuery === '') {
+                                handleSearch('', 'from');
+                              } else {
+                                setSearchTarget('from');
+                              }
+                            }}
+                          />
+                          {isSearching && searchTarget === 'from' && <ActivityIndicator style={{marginTop: 8}} color="#4F46E5" />}
+                          {searchResults.length > 0 && searchTarget === 'from' && (
+                            <View style={styles.resultsContainer}>
+                              {searchResults.map(result => (
+                                <TouchableOpacity key={result.id} style={styles.resultItem} onPress={() => handleSelectPlace(result)}>
+                                  <Text style={styles.resultName}>{result.name}</Text>
+                                  <Text style={styles.resultDesc}>{result.description}</Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
+                          )}
+                        </View>
+                      ) : (
+                        <View style={styles.selectedPlaceCard}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.selectedPlaceName}>{startPlace.name}</Text>
+                            <Text style={styles.selectedPlaceDesc}>{startPlace.description}</Text>
+                          </View>
+                          <TouchableOpacity onPress={() => clearSelection('from')} style={styles.clearBtn}>
+                            <Text style={styles.clearText}>Clear</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )
+                    )}
                   </View>
-                  
                   <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>To (Optional)</Text>
-                    {!selectedPlace ? (
+                    {!destPlace ? (
                       <View>
                         <TextInput 
                           style={styles.searchInput} 
                           placeholder="Search destination..." 
                           placeholderTextColor="#94A3B8" 
                           value={toQuery} 
-                          onChangeText={handleSearch}
+                          onChangeText={(t) => handleSearch(t, 'to')}
                           onFocus={() => {
                             if (toQuery === '') {
-                              handleSearch('');
+                              handleSearch('', 'to');
+                            } else {
+                              setSearchTarget('to');
                             }
                           }}
                         />
-                        <Text style={styles.providerWarningText}>⚠️ Place search provider is not configured yet. Using demo saved destinations.</Text>
-                        {isSearching && <ActivityIndicator style={{marginTop: 8}} color="#4F46E5" />}
-                        {searchResults.length > 0 && (
+                        {isSearching && searchTarget === 'to' && <ActivityIndicator style={{marginTop: 8}} color="#4F46E5" />}
+                        {searchResults.length > 0 && searchTarget === 'to' && (
                           <View style={styles.resultsContainer}>
                             {searchResults.map(result => (
                               <TouchableOpacity key={result.id} style={styles.resultItem} onPress={() => handleSelectPlace(result)}>
@@ -299,10 +471,10 @@ export const SafeWindowScreen: React.FC = () => {
                     ) : (
                       <View style={styles.selectedPlaceCard}>
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.selectedPlaceName}>{selectedPlace.name}</Text>
-                          <Text style={styles.selectedPlaceDesc}>{selectedPlace.description}</Text>
+                          <Text style={styles.selectedPlaceName}>{destPlace.name}</Text>
+                          <Text style={styles.selectedPlaceDesc}>{destPlace.description}</Text>
                         </View>
-                        <TouchableOpacity onPress={clearSelection} style={styles.clearBtn}>
+                        <TouchableOpacity onPress={() => clearSelection('to')} style={styles.clearBtn}>
                           <Text style={styles.clearText}>Clear</Text>
                         </TouchableOpacity>
                       </View>
@@ -313,6 +485,24 @@ export const SafeWindowScreen: React.FC = () => {
 
               <View style={styles.card}>
                 <SectionHeader title="Start Journey" subtitle="Select expected travel time" />
+                
+                <View style={styles.checkInSection}>
+                  <Text style={styles.sectionLabel}>Check-in every</Text>
+                  <View style={styles.chipRow}>
+                    {CHECKIN_OPTIONS.map((min) => (
+                      <TouchableOpacity
+                        key={min}
+                        onPress={() => setCheckInMinutes(min)}
+                        style={[styles.chip, checkInMinutes === min && styles.chipSelected]}
+                      >
+                        <Text style={checkInMinutes === min ? styles.chipTextSelected : styles.chipText}>
+                          {min} min
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
                 <View style={styles.buttonGrid}>
                   <PrimaryButton style={styles.gridButton} title={isStartingJourney || (isStarting && !isStartingJourney) ? "Starting..." : "15 min"} disabled={isStarting || isStartingJourney} onPress={() => handleStart(15)} variant="dark" />
                   <PrimaryButton style={styles.gridButton} title={isStartingJourney || (isStarting && !isStartingJourney) ? "Starting..." : "30 min"} disabled={isStarting || isStartingJourney} onPress={() => handleStart(30)} variant="dark" />
@@ -355,24 +545,26 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 13, fontWeight: '800', textTransform: 'uppercase' },
   textActive: { color: '#4F46E5' },
   textError: { color: '#DC2626' },
-  activeSection: { alignItems: 'center', marginTop: 8 },
-  timerCircle: {
-    width: 180, height: 180, borderRadius: 90, backgroundColor: '#FFFFFF',
-    borderWidth: 6, borderColor: '#EEF2FF',
-    alignItems: 'center', justifyContent: 'center', marginBottom: 20,
-    shadowColor: '#4F46E5', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.1, shadowRadius: 16, elevation: 4
+  activeSection: { alignItems: 'center', marginBottom: 24, marginTop: 8 },
+  timerCircle: { 
+    width: 140, height: 140, borderRadius: 70, backgroundColor: '#EEF2FF', 
+    justifyContent: 'center', alignItems: 'center', marginBottom: 16, borderWidth: 4, 
+    borderColor: '#C7D2FE', shadowColor: '#4F46E5', shadowOffset: { width: 0, height: 4 }, 
+    shadowOpacity: 0.1, shadowRadius: 10, elevation: 4 
   },
-  countdownTitle: { fontSize: 13, color: '#64748B', fontWeight: '600', textTransform: 'uppercase', marginBottom: 4 },
-  countdown: { fontSize: 44, fontWeight: '900', color: '#1E293B' },
-  nextCheckInBox: {
-    backgroundColor: '#FFFBEB', padding: 16, borderRadius: 12, width: '100%', alignItems: 'center', marginBottom: 20,
-    borderWidth: 1, borderColor: '#FEF3C7'
-  },
-  deviationAlertBox: {
-    backgroundColor: '#FEF2F2', borderColor: '#FECACA'
-  },
+  countdownTitle: { fontSize: 13, color: '#64748B', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 },
+  countdown: { fontSize: 36, fontWeight: '800', color: '#4F46E5' },
+  nextCheckInBox: { backgroundColor: '#FEF3C7', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 12, alignItems: 'center', marginBottom: 16, width: '100%' },
+  deviationAlertBox: { backgroundColor: '#FEE2E2', borderColor: '#F87171', borderWidth: 2 },
   checkInLabel: { fontSize: 14, color: '#B45309', fontWeight: '700', marginBottom: 4 },
   checkInCountdown: { fontSize: 32, fontWeight: '800', color: '#D97706' },
+  checkInSection: { marginBottom: 20 },
+  sectionLabel: { fontSize: 14, fontWeight: '700', color: '#64748B', marginBottom: 8 },
+  chipRow: { flexDirection: 'row', gap: 8 },
+  chip: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, backgroundColor: '#F1F5F9', borderWidth: 1, borderColor: '#E2E8F0' },
+  chipSelected: { backgroundColor: '#4F46E5', borderColor: '#4F46E5' },
+  chipText: { fontSize: 14, fontWeight: '600', color: '#475569' },
+  chipTextSelected: { fontSize: 14, fontWeight: '600', color: '#FFFFFF' },
   optionsSection: { marginTop: 8 },
   buttonGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   gridButton: { width: '48%', marginBottom: 12 },

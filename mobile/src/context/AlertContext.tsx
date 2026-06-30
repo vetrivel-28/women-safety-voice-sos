@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabaseClient';
 import { apiClient } from '../api/client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
+import { Alert } from 'react-native';
 
 interface AlertContextType {
   alerts: SOSAlert[];
@@ -92,6 +93,10 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         visible_message: alert.visibleMessage,
         latitude: alert.location?.latitude,
         longitude: alert.location?.longitude,
+        location_accuracy: alert.location?.accuracy,
+        location_captured_at: alert.location?.captured_at,
+        location_provider: alert.location?.provider,
+        location_permission_denied: alert.location?.permissionDenied,
         map_link: alert.location?.mapLink,
         guardian_name: guardian?.name,
         guardian_phone: guardian?.phone,
@@ -108,6 +113,7 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     } catch (err: any) {
       updateAlert(alert.id, { syncStatus: 'FAILED_SYNC', lastSyncError: err.message || 'Network error' });
+      throw err;
     }
   };
 
@@ -214,7 +220,19 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   useEffect(() => {
     if (isLoaded && currentUserId) {
-      retryPendingAlerts();
+      const pendingAlerts = alertsRef.current.filter(
+        a => a.ownerUserId === currentUserId && (a.syncStatus === 'PENDING_SYNC' || a.syncStatus === 'FAILED_SYNC')
+      );
+      if (pendingAlerts.length > 0) {
+        Alert.alert(
+          'Pending SOS Sync',
+          'You have pending SOS alerts from when you were offline. Do you want to retry sending them?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Retry', onPress: () => retryPendingAlerts() }
+          ]
+        );
+      }
     }
   }, [isLoaded, currentUserId]);
 

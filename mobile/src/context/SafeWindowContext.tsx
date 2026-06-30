@@ -17,8 +17,9 @@ interface SafeWindowContextType {
   safeWindow: SafeWindowState;
   startSafeWindow: (
     durationMinutes: SafeWindowDuration, 
-    startLoc?: {latitude: number, longitude: number},
-    destLoc?: {latitude: number, longitude: number}
+    checkInMinutes: number,
+    startLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string},
+    destLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string}
   ) => void;
   endSafeWindow: () => void;
   markCheckInSafe: () => void;
@@ -71,7 +72,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   // Location Sync Refs
   const lastBackendSyncRef = useRef<number>(0);
   const lastSyncedLocRef = useRef<{lat: number, lon: number} | null>(null);
-  const unsentLocRef = useRef<{lat: number, lon: number} | null>(null);
+  const unsentLocRef = useRef<{lat: number, lon: number, accuracy?: number, captured_at?: string, provider?: string} | null>(null);
   const isSyncingLocationRef = useRef(false);
 
   const clearExistingNotification = async () => {
@@ -128,7 +129,12 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           endsAt: endsAtStr,
           checkInDueAt: checkInDueStr,
           lastCheckInAt: active.last_check_in_at || active.started_at,
-          startLocation: active.start_latitude ? { latitude: active.start_latitude, longitude: active.start_longitude } : null,
+          startLocation: active.start_latitude ? { latitude: active.start_latitude, longitude: active.start_longitude, address: active.start_address } : null,
+          destinationLocation: active.destination_latitude ? { latitude: active.destination_latitude, longitude: active.destination_longitude, address: active.destination_address } : null,
+          distance_km: active.distance_km,
+          estimated_duration_minutes: active.estimated_duration_minutes,
+          estimated_arrival_at: active.estimated_arrival_at,
+          route_status: active.route_status,
         }));
         
         missedTriggeredRef.current = false;
@@ -203,7 +209,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   };
 
-  const startSafeWindow = async (durationMinutes: SafeWindowDuration, startLoc?: {latitude: number, longitude: number}, destLoc?: {latitude: number, longitude: number}) => {
+  const startSafeWindow = async (durationMinutes: SafeWindowDuration, checkInMinutes: number, startLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string}, destLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string}) => {
     if (startInFlightRef.current || completeInFlightRef.current || safeWindow.status === 'ACTIVE') {
       throw new Error("Action currently in flight or another journey is already active.");
     }
@@ -229,10 +235,14 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
 
       let initialRoute: {lat: number, lon: number}[] = [];
-      if (actualStartLoc && destLoc) {
-        const fetchedRoute = await getRoute(actualStartLoc, destLoc);
-        if (fetchedRoute) initialRoute = fetchedRoute;
-        else initialRoute = [{lat: actualStartLoc.latitude, lon: actualStartLoc.longitude}, {lat: destLoc.latitude, lon: destLoc.longitude}];
+      if (actualStartLoc && actualStartLoc.latitude && actualStartLoc.longitude && destLoc && destLoc.latitude && destLoc.longitude) {
+        initialRoute = [{lat: actualStartLoc.latitude, lon: actualStartLoc.longitude}, {lat: destLoc.latitude, lon: destLoc.longitude}];
+        // Async route fetch
+        getRoute(actualStartLoc, destLoc).then(fetchedRoute => {
+          if (fetchedRoute) {
+            setSafeWindow(prev => prev.status === 'ACTIVE' ? { ...prev, routePoints: fetchedRoute } : prev);
+          }
+        }).catch(() => {});
       }
 
       let journeyData: any;
@@ -243,8 +253,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const payload = {
           journey_name: "Safe Journey",
           start_label: "Current Location",
-          ...(actualStartLoc && { start_latitude: actualStartLoc.latitude, start_longitude: actualStartLoc.longitude }),
-          ...(destLoc ? { destination_label: "Destination", destination_latitude: destLoc.latitude, destination_longitude: destLoc.longitude } : {}),
+          ...(actualStartLoc ? { start_latitude: actualStartLoc.latitude, start_longitude: actualStartLoc.longitude, start_address: actualStartLoc.address, start_place_id: (actualStartLoc as any).placeId, location_provider: (actualStartLoc as any).provider || (destLoc as any)?.provider } : {}),
+          ...(destLoc ? { destination_label: "Destination", destination_latitude: destLoc.latitude, destination_longitude: destLoc.longitude, destination_address: destLoc.address, destination_place_id: (destLoc as any).placeId, location_provider: (destLoc as any).provider || (actualStartLoc as any)?.provider } : {}),
           ...(demoMode ? {
              duration_seconds: 30,
              duration_minutes: 1,
@@ -255,7 +265,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           } : {
              duration_seconds: durationMinutes * 60,
              duration_minutes: durationMinutes,
-             check_in_interval_minutes: 5,
+             check_in_interval_minutes: checkInMinutes,
              expected_duration_minutes: durationMinutes
           })
         };
@@ -321,6 +331,10 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         routePoints: initialRoute,
         routeDeviationWarningAt: null,
         routeDeviationDetected: false,
+        distance_km: journeyData.distance_km,
+        estimated_duration_minutes: journeyData.estimated_duration_minutes,
+        estimated_arrival_at: journeyData.estimated_arrival_at,
+        route_status: journeyData.route_status,
       });
 
       startBackgroundLocationService();
@@ -363,6 +377,9 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const journey = res.data;
         if (journey.status === 'completed' || journey.status === 'missed') {
             setSafeWindow(prev => ({ ...prev, status: journey.status === 'completed' ? 'COMPLETED' : 'MISSED_CHECKIN' }));
+            if (journey.status === 'completed') {
+              stopBackgroundLocationService();
+            }
             return;
         }
         setSafeWindow(prev => {
@@ -380,6 +397,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       console.warn("Could not check in", e);
       if (e.response && (e.response.status === 404 || e.response.status === 409)) {
           setSafeWindow(prev => ({ ...prev, status: 'COMPLETED' }));
+          stopBackgroundLocationService();
       }
     } finally {
       checkInInFlightRef.current = false;
@@ -432,10 +450,19 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         } as any);
       });
       
-      stopBackgroundLocationService();
+      // Do NOT stop background location service for missed check-in
+      // Journey continues
+      
+      const intervalMins = prev.durationMinutes ? 5 : 5; // Default 5 if unknown
+      const nextDue = new Date(new Date().getTime() + intervalMins * 60000).toISOString();
+      
+      // Allow next checkin to trigger again if they miss it again
+      setTimeout(() => { missedTriggeredRef.current = false; }, 10000);
+
       return {
         ...prev,
-        status: 'MISSED_CHECKIN',
+        status: 'ACTIVE',
+        checkInDueAt: nextDue,
         missedCheckInAt: new Date().toISOString(),
       };
     });
@@ -511,34 +538,50 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
           if (shouldSync) {
             isSyncingLocationRef.current = true;
+            const payload = unsentLocRef.current ? {
+              latitude: unsentLocRef.current.lat,
+              longitude: unsentLocRef.current.lon,
+              accuracy: unsentLocRef.current.accuracy,
+              captured_at: unsentLocRef.current.captured_at,
+              provider: unsentLocRef.current.provider
+            } : {
+              latitude: currentLoc.lat,
+              longitude: currentLoc.lon,
+              accuracy: loc.accuracy,
+              captured_at: loc.captured_at,
+              provider: loc.provider
+            };
+
             try {
-              await apiClient.patch(`/api/journeys/${safeWindow.journeyId}/location`, {
-                latitude: currentLoc.lat,
-                longitude: currentLoc.lon
-              });
+              await apiClient.patch(`/api/journeys/${safeWindow.journeyId}/location`, payload);
               lastBackendSyncRef.current = now;
               lastSyncedLocRef.current = currentLoc;
               unsentLocRef.current = null;
             } catch (e) {
               console.warn("Could not sync location to backend (offline/network issue)", e);
-              unsentLocRef.current = currentLoc;
+              if (!unsentLocRef.current) {
+                unsentLocRef.current = { lat: currentLoc.lat, lon: currentLoc.lon, accuracy: loc.accuracy, captured_at: loc.captured_at, provider: loc.provider };
+              }
             } finally {
               isSyncingLocationRef.current = false;
             }
           }
         }
 
-        // 2. Route deviation and distance check
-        if (safeWindow.routePoints && safeWindow.routePoints.length > 2 && safeWindow.destinationLocation && !safeWindow.routeDeviationDetected && !safeWindow.demoMode) {
-          const destLoc = { lat: safeWindow.destinationLocation!.latitude, lon: safeWindow.destinationLocation!.longitude };
-          
+        // 2. Distance check (independent of route points)
+        if (safeWindow.destinationLocation && !safeWindow.demoMode && 
+            typeof safeWindow.destinationLocation.latitude === 'number' && 
+            typeof safeWindow.destinationLocation.longitude === 'number' &&
+            typeof currentLoc.lat === 'number' && typeof currentLoc.lon === 'number') {
+          const destLoc = { lat: safeWindow.destinationLocation.latitude, lon: safeWindow.destinationLocation.longitude };
           const distToDest = distanceBetweenPointsMeters(currentLoc.lat, currentLoc.lon, destLoc.lat, destLoc.lon);
-          if (distToDest < 100000) { 
-             setDistanceToDestination(distToDest);
-          } else {
-             setDistanceToDestination(null);
-          }
+          setDistanceToDestination(distToDest);
+        } else {
+          setDistanceToDestination(null);
+        }
 
+        // 3. Route deviation check
+        if (safeWindow.routePoints && safeWindow.routePoints.length > 2 && safeWindow.destinationLocation && !safeWindow.routeDeviationDetected && !safeWindow.demoMode) {
           if (isRouteDeviation(currentLoc, safeWindow.routePoints!, 300)) {
             setSafeWindow(prev => {
               if (prev.routeDeviationDetected) return prev;

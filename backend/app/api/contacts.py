@@ -1,3 +1,4 @@
+import httpx
 import logging
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -38,6 +39,10 @@ def get_contacts(auth_data: dict = Depends(get_current_user)):
     try:
         result = supabase.table("emergency_contacts").select("*").eq("user_id", user.id).order("priority").execute()
         return result.data
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error fetching contacts: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not fetch contacts")
@@ -60,6 +65,10 @@ def add_contact(contact_in: ContactCreate, auth_data: dict = Depends(get_current
         if not result.data:
             raise HTTPException(status_code=500, detail="Failed to add contact")
         return result.data[0]
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error adding contact: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -81,6 +90,10 @@ def update_contact(contact_id: str, contact_in: ContactUpdate, auth_data: dict =
         if not result.data:
             raise HTTPException(status_code=404, detail="Contact not found")
         return result.data[0]
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error updating contact: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -93,6 +106,10 @@ def delete_contact(contact_id: str, auth_data: dict = Depends(get_current_user))
     try:
         result = supabase.table("emergency_contacts").delete().eq("id", contact_id).eq("user_id", user.id).execute()
         return
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
     except Exception as e:
         logger.error(f"Error deleting contact: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

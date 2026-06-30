@@ -20,8 +20,8 @@ if (Platform.OS === 'android') {
   });
 }
 
-// NOTE: In Expo SDK 53+, remote push notifications are not supported in Expo Go.
-// This service strictly uses local notifications to avoid the push token error.
+// NOTE: Remote push notifications require an Expo development build in SDK 53+.
+// Guardian UI must not block on push unavailability in Expo Go.
 export const requestNotificationPermissions = async () => {
   try {
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
@@ -33,7 +33,7 @@ export const requestNotificationPermissions = async () => {
     return finalStatus === 'granted';
   } catch (error) {
     // Suppress console errors related to push functionality in Expo Go
-    console.warn("Local notifications permission check gracefully failed (likely Expo Go SDK 53 limitation).", error);
+    console.log("Local notifications permission check gracefully failed (likely Expo Go SDK 53 limitation).", error);
     return false;
   }
 };

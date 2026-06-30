@@ -28,7 +28,7 @@ console.log(`[API] Base URL configured as: ${API_BASE_URL}`);
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -84,24 +84,47 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   (response) => {
     const elapsed = Date.now() - ((response.config as any).metadata?.startTime || Date.now());
-    console.log(`[API Response] ${response.config.method?.toUpperCase()} ${response.config.url} -> Status: ${response.status}`);
-    console.log(`[API Response Details]`, {
-      elapsedMs: elapsed,
-      body: response.data
-    });
+    const method = response.config.method?.toUpperCase();
+    const url = response.config.url;
+    
+    if (Array.isArray(response.data)) {
+      console.log(`[API Response] ${method} ${url} -> ${response.status}, count=${response.data.length}, elapsedMs=${elapsed}`);
+    } else {
+      console.log(`[API Response] ${method} ${url} -> ${response.status}, elapsedMs=${elapsed}`);
+    }
+    
     return response;
   },
   async (error) => {
     const config = error.config as any;
     const elapsed = config?.metadata?.startTime ? Date.now() - config.metadata.startTime : 'unknown';
+    const method = config?.method?.toUpperCase() || 'UNKNOWN';
+    const url = config?.url || 'UNKNOWN';
+
+    if (axios.isCancel(error) || error.code === 'ERR_CANCELED' || error.message?.includes('canceled')) {
+      console.log(`[API] Request canceled: ${method} ${url}`);
+      return Promise.reject(error);
+    }
 
     if (error.response) {
-      console.error(`[API Response Error] ${config?.method?.toUpperCase()} ${config?.url} -> Status: ${error.response.status}`);
-      console.error(`[API Error Details]`, {
-        elapsedMs: elapsed,
-        body: error.response.data,
-        headers: error.response.headers
-      });
+      const status = error.response.status;
+      console.error(`[API Error] ${method} ${url} -> ${status}, detail=${JSON.stringify(error.response.data?.detail || error.response.data)}, elapsedMs=${elapsed}`);
+      
+      if (status === 401 && !config._retry) {
+        config._retry = true;
+        try {
+          console.log('[API] Attempting session refresh after 401...');
+          const { data, error: refreshError } = await supabase.auth.refreshSession();
+          if (data?.session && !refreshError) {
+            config.headers.Authorization = `Bearer ${data.session.access_token}`;
+            return apiClient(config);
+          }
+        } catch (e) {
+          console.error('[API] Session refresh failed', e);
+        }
+      }
+      
+      // 503 is kept as an error but components shouldn't wipe data on it.
     } else if (error.request) {
       const logKey = `${config?.method?.toUpperCase()} ${config?.url}`;
       const now = Date.now();
@@ -119,7 +142,9 @@ apiClient.interceptors.response.use(
       
       // Enhance network error
       error.isNetworkError = true;
-      error.customMessage = `Cannot reach backend.\nBackend URL: ${config?.baseURL}\n\nPossible causes:\n• backend not running\n• phone not on same Wi-Fi\n• firewall\n• invalid backend URL`;
+      error.customMessage = __DEV__ 
+        ? `Cannot reach backend. Check that the backend is running on the same network.\n\n[DEV DETAILS]\nBase URL: ${config?.baseURL}\nCheck: laptop IP, same WiFi/hotspot, backend running with --host 0.0.0.0, and firewall.`
+        : `Cannot reach backend. Check that the backend is running on the same network.`;
     } else {
       console.error(`[API Error]`, error.message);
     }

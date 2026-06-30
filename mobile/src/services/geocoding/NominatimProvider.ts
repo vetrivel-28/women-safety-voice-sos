@@ -1,9 +1,15 @@
 import { GeocodingProvider, PlaceResult } from './GeocodingProvider';
 
 export class NominatimProvider implements GeocodingProvider {
-  async searchPlaces(query: string): Promise<PlaceResult[]> {
+  async searchPlaces(query: string, currentLoc?: {latitude: number, longitude: number}): Promise<PlaceResult[]> {
     try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&countrycodes=in`, {
+      // Note: Public Nominatim API is for demo/testing and has usage limits, not for production SLA
+      // Bias search to Tamil Nadu
+      const searchBox = `76.0,13.7,80.5,8.0`; // left,top,right,bottom (lon, lat)
+      const searchQuery = query.toLowerCase().includes('tamil nadu') ? query : `${query}, Tamil Nadu`;
+      
+      let url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery)}&format=json&limit=10&addressdetails=1&viewbox=${searchBox}&bounded=1`;
+      const response = await fetch(url, {
         headers: {
           'Accept': 'application/json',
           'User-Agent': 'SafeHer/1.0 (Mobile App)'
@@ -17,7 +23,8 @@ export class NominatimProvider implements GeocodingProvider {
         name: item.name || (item.display_name ? item.display_name.split(',')[0] : 'Unknown'),
         description: item.display_name || '',
         latitude: parseFloat(item.lat),
-        longitude: parseFloat(item.lon)
+        longitude: parseFloat(item.lon),
+        provider: 'openstreetmap'
       }));
     } catch (e) {
       console.warn("Nominatim searchPlaces failed", e);

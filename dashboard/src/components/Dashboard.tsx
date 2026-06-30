@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+estimated_duration_minutesimport React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { AlertCircle, ShieldCheck, Clock, MapPin, LogOut } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';

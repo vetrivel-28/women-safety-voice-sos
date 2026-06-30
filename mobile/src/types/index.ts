@@ -10,6 +10,7 @@ export type RootStackParamList = {
   Settings: undefined;
   GuardianDashboard: undefined;
   GuardianAlertDetails: { alertId?: string; journeyId?: string };
+  GuardianPersonDetail: { protectedUserId: string; name?: string; status?: string };
 };
 
 export type AlertStatus = 'ACTIVE' | 'CANCELLED' | 'SILENT_DURESS_ACTIVE' | 'RESOLVED';
@@ -37,10 +38,11 @@ export interface SOSAlert {
   location?: {
     latitude: number;
     longitude: number;
-    accuracy?: number | null;
+    accuracy: number;
     mapLink: string;
-    capturedAt: string;
-    permissionDenied?: boolean;
+    captured_at: string;
+    provider: string;
+    permissionDenied: boolean;
   };
   syncStatus?: 'PENDING_SYNC' | 'SYNCED' | 'FAILED_SYNC';
   backendId?: string;
@@ -78,4 +80,8 @@ export interface SafeWindowState {
   routePoints?: {lat: number, lon: number}[];
   routeDeviationWarningAt?: string | null;
   routeDeviationDetected?: boolean;
+  distance_km?: number | null;
+  estimated_duration_minutes?: number | null;
+  estimated_arrival_at?: string | null;
+  route_status?: string | null;
 }

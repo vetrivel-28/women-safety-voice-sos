@@ -1,12 +1,19 @@
-import { NominatimProvider } from './geocoding/NominatimProvider';
+import { GooglePlacesProvider } from './geocoding/GooglePlacesProvider';
 import { PlaceResult, GeocodingProvider } from './geocoding/GeocodingProvider';
 
-const provider: GeocodingProvider = new NominatimProvider();
+import { NominatimProvider } from './geocoding/NominatimProvider';
+
+const googleApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+const provider: GeocodingProvider = googleApiKey 
+  ? new GooglePlacesProvider() 
+  : new NominatimProvider();
+
+export const isUsingNominatim = !googleApiKey;
 
 export { PlaceResult };
 
-export const searchPlaces = async (query: string): Promise<PlaceResult[]> => {
-  return provider.searchPlaces(query);
+export const searchPlaces = async (query: string, currentLoc?: {latitude: number, longitude: number}): Promise<PlaceResult[]> => {
+  return provider.searchPlaces(query, currentLoc);
 };
 
 export const geocodePlace = async (placeId: string): Promise<{latitude: number, longitude: number} | null> => {

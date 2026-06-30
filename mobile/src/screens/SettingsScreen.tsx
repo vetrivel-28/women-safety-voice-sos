@@ -1,5 +1,6 @@
+import { SafeAreaView } from 'react-native-safe-area-context';
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Platform, Alert, Switch, TouchableOpacity, TextInput, KeyboardAvoidingView, Linking, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Platform, Alert, Switch, TouchableOpacity, TextInput, KeyboardAvoidingView, Linking, ActivityIndicator } from 'react-native';
 import { supabase } from '../lib/supabaseClient';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SectionHeader } from '../components/SectionHeader';
@@ -18,8 +19,7 @@ export const SettingsScreen: React.FC = () => {
   const [medicalNotes, setMedicalNotes] = useState('');
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
-
-  // --- DIAGNOSTICS ---
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const addLog = (msg: string) => {
     const time = new Date().toLocaleTimeString();
@@ -28,6 +28,8 @@ export const SettingsScreen: React.FC = () => {
 
   const { contacts, getPrimaryContact } = useContacts();
   const [devMode, setDevMode] = useState(false);
+
+  const [originalProfile, setOriginalProfile] = useState<any>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -49,6 +51,7 @@ export const SettingsScreen: React.FC = () => {
 
       const parsed = response.data;
       if (parsed) {
+        setOriginalProfile(parsed);
         setName(parsed.name || '');
         setPhone(parsed.phone || '');
         setBloodGroup(parsed.blood_group || '');
@@ -56,6 +59,8 @@ export const SettingsScreen: React.FC = () => {
       }
     } catch (e: any) {
       addLog(`-> GET FAILED: ${e.message}`);
+      // Do not clear the existing profile state on failure
+      Alert.alert("Notice", "Could not load profile. Showing last known data.");
     } finally {
       setIsLoadingProfile(false);
     }
@@ -79,16 +84,34 @@ export const SettingsScreen: React.FC = () => {
         return;
       }
 
+      // Only send fields that actually changed from the loaded profile
+      const changed: any = {};
+      if (name !== (originalProfile?.name || '')) changed.name = name;
+      if (phone !== (originalProfile?.phone || '')) changed.phone = phone;
+      if (bloodGroup !== (originalProfile?.blood_group || '')) changed.blood_group = bloodGroup;
+      if (medicalNotes !== (originalProfile?.medical_notes || '')) changed.medical_notes = medicalNotes;
+
+      if (Object.keys(changed).length === 0) {
+         Alert.alert('Notice', 'No changes to save.');
+         setIsSavingProfile(false);
+         return;
+      }
+
       // 2. Perform Save
-      const response = await apiClient.patch('/api/profile', {
-        name,
-        phone,
-        blood_group: bloodGroup,
-        medical_notes: medicalNotes
-      });
+      const response = await apiClient.patch('/api/profile', changed);
       
       addLog(`-> POST STATUS: ${response.status}`);
       Alert.alert('Success', 'Profile updated successfully.');
+      
+      // Trust the server response for the new state
+      if (response.data) {
+        setOriginalProfile(response.data);
+        setName(response.data.name || '');
+        setPhone(response.data.phone || '');
+        setBloodGroup(response.data.blood_group || '');
+        setMedicalNotes(response.data.medical_notes || '');
+      }
+      setIsEditingProfile(false);
 
     } catch (e: any) {
       addLog(`-> POST FAILED: ${e.message}`);
@@ -155,11 +178,11 @@ export const SettingsScreen: React.FC = () => {
 
         {session && (
           <>
-            <SectionHeader title="Personal Profile" subtitle="Important details for emergency responders" />
+            <SectionHeader title={isEditingProfile ? "Edit Profile" : "My Profile"} subtitle="Important details for emergency responders" />
             <View style={styles.card}>
               {isLoadingProfile ? (
                 <ActivityIndicator color="#4F46E5" />
-              ) : (
+              ) : isEditingProfile ? (
                 <>
                   <Text style={styles.inputLabel}>Full Name</Text>
                   <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Your full name" />
@@ -173,7 +196,29 @@ export const SettingsScreen: React.FC = () => {
                   <Text style={styles.inputLabel}>Emergency / Medical Notes</Text>
                   <TextInput style={[styles.input, { height: 80 }]} value={medicalNotes} onChangeText={setMedicalNotes} placeholder="Allergies, medications, etc." multiline />
 
-                  <PrimaryButton title={isSavingProfile ? "Saving..." : "Save Profile"} variant="primary" onPress={saveProfile} disabled={isSavingProfile} />
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
+                    <View style={{ flex: 1, marginRight: 8 }}>
+                      <PrimaryButton title="Cancel" variant="outline" onPress={() => {
+                        // Revert to original
+                        setName(originalProfile?.name || '');
+                        setPhone(originalProfile?.phone || '');
+                        setBloodGroup(originalProfile?.blood_group || '');
+                        setMedicalNotes(originalProfile?.medical_notes || '');
+                        setIsEditingProfile(false);
+                      }} />
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 8 }}>
+                      <PrimaryButton title={isSavingProfile ? "Saving..." : "Save Profile"} variant="primary" onPress={saveProfile} disabled={isSavingProfile} />
+                    </View>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.listItem}><Text style={styles.bold}>Name:</Text> {name || 'Not provided'}</Text>
+                  <Text style={styles.listItem}><Text style={styles.bold}>Phone:</Text> {phone || 'Not provided'}</Text>
+                  <Text style={styles.listItem}><Text style={styles.bold}>Blood Group:</Text> {bloodGroup || 'Not provided'}</Text>
+                  <Text style={styles.listItem}><Text style={styles.bold}>Medical Notes:</Text> {medicalNotes || 'None'}</Text>
+                  <PrimaryButton title="Edit Profile" variant="primary" onPress={() => setIsEditingProfile(true)} style={{ marginTop: 16 }} />
                 </>
               )}
             </View>
@@ -224,14 +269,6 @@ export const SettingsScreen: React.FC = () => {
           </View>
         </View>
 
-        <SectionHeader title="Privacy" />
-        <View style={styles.card}>
-          <Text style={styles.listItem}>• Location is used during SOS and Journey Mode.</Text>
-          <Text style={styles.listItem}>• Location is not continuously tracked in normal mode.</Text>
-          <Text style={styles.listItem}>• Microphone is off by default.</Text>
-          <Text style={styles.listItem}>• Offline alerts are stored locally until sync is available.</Text>
-          <Text style={styles.listItem}>• Silent alerts are for situations where a visible alarm may be unsafe.</Text>
-        </View>
 
         <SectionHeader title="App Info" />
         <View style={styles.card}>

@@ -55,11 +55,35 @@ const JourneyStatusCardComponent: React.FC<Props> = ({ journey, onViewDetails })
           </Text>
         </View>
         <View style={styles.detailRow}>
-          <Text style={styles.detailLabel}>Expected Arrival</Text>
+          <Text style={styles.detailLabel}>Max Check-in Deadline</Text>
           <Text style={styles.detailValue}>
             {new Date(journey.ends_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </Text>
         </View>
+        {journey.route_status === 'calculated' && journey.distance_km != null && journey.estimated_duration_minutes != null && (
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Expected Arrival</Text>
+            <Text style={styles.detailValue}>
+              {journey.estimated_arrival_at ? new Date(journey.estimated_arrival_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Unknown'} ({journey.distance_km} km)
+            </Text>
+          </View>
+        )}
+        {(journey.start_address || journey.start_latitude) && (
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>From</Text>
+            <Text style={[styles.detailValue, { flex: 1, textAlign: 'right', marginLeft: 16 }]} numberOfLines={2}>
+              {journey.start_address || `${journey.start_latitude?.toFixed(4)}, ${journey.start_longitude?.toFixed(4)}`}
+            </Text>
+          </View>
+        )}
+        {(journey.destination_address || journey.destination_latitude) && (
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>To</Text>
+            <Text style={[styles.detailValue, { flex: 1, textAlign: 'right', marginLeft: 16 }]} numberOfLines={2}>
+              {journey.destination_address || `${journey.destination_latitude?.toFixed(4)}, ${journey.destination_longitude?.toFixed(4)}`}
+            </Text>
+          </View>
+        )}
         {journey.last_location_at && (
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Location Freshness</Text>

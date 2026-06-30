@@ -1,5 +1,6 @@
+import { SafeAreaView } from 'react-native-safe-area-context';
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TextInput, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
 import { useAlert } from '../context/AlertContext';
 import { useContacts } from '../context/ContactsContext';
 import { getCurrentLocationForAlert } from '../utils/location';
@@ -48,7 +49,17 @@ export const SilentSOSScreen: React.FC = () => {
               guardian_email: primaryGuardian?.email
             });
             setAlertId(newId);
-            setLocationStatus(locationData && !locationData.permissionDenied ? 'Location attached ✓' : 'Location unavailable — alert still sent');
+            if (locationData?.permissionDenied) {
+              setLocationStatus('Location permission denied');
+            } else if (locationData?.latitude && locationData?.longitude) {
+              if (locationData.accuracy && locationData.accuracy <= 100) {
+                setLocationStatus('Location attached ✓');
+              } else {
+                setLocationStatus('Location attached, low accuracy');
+              }
+            } else {
+              setLocationStatus('');
+            }
           } catch (e) {
             setLocationStatus('Failed to send alert');
           }

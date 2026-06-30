@@ -1,11 +1,20 @@
 export type GuardianStatus = 'SOS ACTIVE' | 'CHECK-IN MISSED' | 'JOURNEY ACTIVE' | 'SAFE';
 
 export interface GuardedUser {
-  id: string;
+  protectedUserId: string;
   name: string;
-  email: string;
-  phone: string;
+  email?: string | null;
+  phone?: string | null;
   status: GuardianStatus;
+  active_alerts: number;
+  active_journeys: number;
+  last_activity?: any;
+  last_location?: {
+    latitude: number | null;
+    longitude: number | null;
+    accuracy: number | null;
+    captured_at: string | null;
+  };
 }
 
 export interface GuardianJourney {
@@ -17,13 +26,19 @@ export interface GuardianJourney {
   last_check_in_at: string;
   status: string; // 'ACTIVE', 'COMPLETED', 'MISSED_CHECKIN'
   duration_minutes: number;
+  start_address?: string;
   start_latitude?: number;
   start_longitude?: number;
+  destination_address?: string;
   destination_latitude?: number;
   destination_longitude?: number;
   current_latitude?: number;
   current_longitude?: number;
   last_location_at?: string;
+  distance_km?: number;
+  estimated_duration_minutes?: number;
+  estimated_arrival_at?: string;
+  route_status?: string;
   profiles?: {
     full_name: string;
     phone: string;

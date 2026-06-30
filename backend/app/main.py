@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import auth, alerts, guardians, sos, profile, contacts, journeys
+from app.api import auth, alerts, guardians, sos, profile, contacts, journeys, places
 from app.core.config import settings
 from app.db.client import get_supabase_client
 from contextlib import asynccontextmanager
@@ -42,6 +42,25 @@ async def log_requests(request: Request, call_next):
         logger.error(f"<=== [MIDDLEWARE] EXCEPTION: {str(e)}")
         raise
 
+import httpx
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(httpx.TimeoutException)
+async def httpx_timeout_handler(request: Request, exc: httpx.TimeoutException):
+    logger.error(f"Supabase Timeout: {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Temporary backend data service unavailable. Please retry."}
+    )
+
+@app.exception_handler(httpx.RequestError)
+async def httpx_request_error_handler(request: Request, exc: httpx.RequestError):
+    logger.error(f"Supabase Request Error: {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Temporary backend data service unavailable. Please retry."}
+    )
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -59,6 +78,7 @@ app.include_router(sos.router)
 app.include_router(profile.router)
 app.include_router(contacts.router)
 app.include_router(journeys.router)
+app.include_router(places.router)
 
 @app.get("/")
 async def root():

@@ -1,5 +1,6 @@
+import { SafeAreaView } from 'react-native-safe-area-context';
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Alert, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Alert, Platform } from 'react-native';
 import { useSafeWindow } from '../context/SafeWindowContext';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { useNavigation } from '@react-navigation/native';
