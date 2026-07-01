@@ -441,7 +441,8 @@ def handle_missed_checkin(journey_id: str, auth_data: dict = Depends(get_current
                         user_id=user.id,
                         alert_type="JOURNEY_MISSED_CHECKIN",
                         user=user,
-                        location=location
+                        location=location,
+                        alert_id=alert_data["id"] if alert_data else None
                     )
                     guardian_notified = True
                     reason = "Success"

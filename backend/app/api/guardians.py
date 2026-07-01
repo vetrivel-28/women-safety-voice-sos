@@ -21,43 +21,64 @@ router = APIRouter(prefix="/api/guardians", tags=["guardians"])
 
 @router.get("/me/code")
 def get_my_guardian_code(auth_data: dict = Depends(get_current_user)):
+    """
+    Returns the authenticated user's 6-digit ward code.
+    Generates and persists a new code if one is missing or invalid.
+    """
     user = auth_data["user"]
     service_client = get_service_role_client()
+    import re
+    import random
+
     try:
         res = service_client.table("profiles").select("guardian_code, id, email, full_name").eq("id", user.id).execute()
-        
-        # If no profile exists, upsert one
+
+        # If no profile exists, create a minimal one so we can save the code
         if not res.data:
             service_client.table("profiles").upsert({
                 "id": user.id,
-                "email": user.email,
+                "email": user.email or "",
+                "full_name": "",
             }).execute()
-            # Fetch again
             res = service_client.table("profiles").select("guardian_code, id, email, full_name").eq("id", user.id).execute()
-            
+
+        if not res.data:
+            raise HTTPException(status_code=500, detail="Could not find or create profile")
+
         profile = res.data[0]
-        
-        # If no guardian code, generate one
-        if not profile.get("guardian_code"):
-            import random
-            code = f"{random.randint(0, 999999):06d}"
+        current_code = profile.get("guardian_code") or ""
+
+        # Validate: must be exactly 6 digits, no SH- prefix, no spaces
+        if not re.match(r"^[0-9]{6}$", str(current_code)):
+            # Generate a unique 6-digit code
+            for _ in range(50):
+                candidate = f"{random.randint(0, 999999):06d}"
+                collision = service_client.table("profiles").select("id").eq("guardian_code", candidate).neq("id", user.id).execute()
+                if not collision.data:
+                    code = candidate
+                    break
+            else:
+                raise HTTPException(status_code=500, detail="Could not generate unique ward code")
+
             service_client.table("profiles").update({"guardian_code": code}).eq("id", user.id).execute()
-            profile["guardian_code"] = code
+            current_code = code
 
         return {
             "user_id": profile["id"],
             "email": profile.get("email"),
             "full_name": profile.get("full_name"),
-            "ward_code": profile["guardian_code"],
-            "code": profile["guardian_code"]
+            "ward_code": current_code,
+            "code": current_code,
         }
+    except HTTPException:
+        raise
     except httpx.TimeoutException:
         raise
     except httpx.RequestError:
         raise
     except Exception as e:
-        logger.error(f"Error fetching guardian code: {e}")
-        raise HTTPException(status_code=500, detail="Could not fetch guardian code")
+        logger.exception("Error fetching ward code")
+        raise HTTPException(status_code=500, detail="Could not fetch ward code")
 
 @router.get("", response_model=List[dict])
 def get_guardians(auth_data: dict = Depends(get_current_user)):
@@ -605,6 +626,31 @@ def link_guardian(
                 detail="Failed to create guardian link"
             )
 
+        # Notify the ward that they have a new guardian (bell notification)
+        try:
+            guardian_profile = (
+                service_client.table("profiles")
+                .select("full_name, email")
+                .eq("id", user.id)
+                .execute()
+            )
+            gp = guardian_profile.data[0] if guardian_profile.data else {}
+            guardian_display = gp.get("full_name") or gp.get("email") or "Someone"
+
+            service_client.table("in_app_notifications").insert({
+                "user_id": ward_id,
+                "actor_user_id": user.id,
+                "type": "guardian_linked",
+                "title": "New guardian",
+                "message": f"{guardian_display} is now monitoring you as a guardian.",
+                "metadata": {
+                    "guardian_id": user.id,
+                    "guardian_name": guardian_display,
+                },
+            }).execute()
+        except Exception as notif_err:
+            logger.warning(f"Failed to insert guardian_linked notification: {notif_err}")
+
         return {
             "message": "Ward linked successfully",
             "protected_user_id": ward_id,
@@ -706,33 +752,47 @@ def create_guardian_action(alert_id: str, payload: ActionRequest, auth_data: dic
             }
         )
 
-        # Map action to a friendly title
-        action_titles = {
-            "I_AM_RESPONDING": "Guardian is responding",
-            "NAVIGATING_TO_YOU": "Guardian is on the way",
-            "CALLING_POLICE": "Guardian is calling police",
-            "VIEWED_ALERT": "Guardian viewed alert",
-            "RESOLVED": "Guardian resolved the alert",
-            "FALSE_ALARM": "Guardian marked false alarm"
+        # Map action to a friendly title — normalize legacy/alternate action type names
+        ACTION_NORMALIZATION = {
+            "MARK_VIEWED": "VIEWED_ALERT",
+            "DISMISSED": "DISMISSED_ALERT",
+            "CALLED_USER": "CALLED_WARD",
+            "SENT_MESSAGE": "MESSAGED_WARD",
+            "NAVIGATING_TO_YOU": "NAVIGATING_TO_WARD",
         }
-        title = action_titles.get(payload.action_type, f"Guardian action: {payload.action_type}")
+        normalized_action_type = ACTION_NORMALIZATION.get(payload.action_type, payload.action_type)
+
+        action_titles = {
+            "VIEWED_ALERT": "Guardian viewed alert",
+            "I_AM_RESPONDING": "Guardian is responding",
+            "NAVIGATING_TO_WARD": "Guardian is on the way",
+            "CALLING_POLICE": "Guardian is calling police",
+            "CALLED_WARD": "Guardian called the ward",
+            "MESSAGED_WARD": "Guardian sent a message",
+            "RESOLVED": "Guardian resolved the alert",
+            "FALSE_ALARM": "Guardian marked false alarm",
+            "DISMISSED_ALERT": "Guardian dismissed the alert",
+        }
+        title = action_titles.get(normalized_action_type, f"Guardian action: {normalized_action_type}")
         msg = payload.message or "Guardian reacted to your SOS."
 
         # Insert IN_APP_NOTIFICATION for the protected user
-        notification_service._log_event(
-            event_type="IN_APP_NOTIFICATION",
-            status="UNREAD",
-            channel="IN_APP",
-            user_id=protected_user_id,
-            guardian_user_id=user.id,
-            alert_id=alert_id,
-            journey_id=journey_id,
-            recipient=title,
-            message=msg,
-            metadata={
-                "action_type": payload.action_type
-            }
-        )
+        try:
+            service_client.table("in_app_notifications").insert({
+                "user_id": protected_user_id,
+                "actor_user_id": user.id,
+                "alert_id": alert_id,
+                "journey_id": journey_id,
+                "type": normalized_action_type,
+                "title": title,
+                "message": msg,
+                "metadata": {
+                    "action_type": normalized_action_type,
+                    "original_action_type": payload.action_type,
+                }
+            }).execute()
+        except Exception as e:
+            logger.warning(f"Failed to create in-app notification: {e}")
         return result.data[0]
     except HTTPException:
         raise
@@ -814,4 +874,81 @@ def get_guardian_actions(alert_id: str, auth_data: dict = Depends(get_current_us
         raise
     except Exception as e:
         logger.error(f"Error fetching actions: {e}", exc_info=True)
-        return []
+        return []
+
+
+@router.get("/safety-recipients")
+def get_safety_recipients(auth_data: dict = Depends(get_current_user)):
+    """
+    Returns all safety recipients for the authenticated ward:
+    - Direct guardians (via guardian_links, status=ACTIVE)
+    - Approved/active family members (via family_members, status=active)
+
+    This is the single resolver used by Spec 2 notification dispatch.
+    Each entry has: user_id, name, email, phone, source ('guardian' | 'family'), family_id (if family)
+    """
+    user = auth_data["user"]
+    service_client = get_service_role_client()
+
+    try:
+        recipients: list[dict] = []
+        seen_ids: set[str] = set()
+
+        # 1. Direct guardians
+        try:
+            links_res = service_client.table("guardian_links").select(
+                "guardian_user_id, profiles!guardian_links_guardian_id_fkey(id, full_name, phone, email)"
+            ).eq("user_id", user.id).eq("status", "ACTIVE").execute()
+
+            for row in links_res.data or []:
+                prof = normalize_profile(row.get("profiles", {}))
+                gid = prof.get("id") or row.get("guardian_user_id")
+                if gid and gid not in seen_ids:
+                    seen_ids.add(gid)
+                    recipients.append({
+                        "user_id": gid,
+                        "name": prof.get("full_name") or "Unknown",
+                        "email": prof.get("email") or "",
+                        "phone": prof.get("phone") or "",
+                        "source": "guardian",
+                        "family_id": None,
+                    })
+        except Exception as e:
+            logger.warning(f"Could not fetch guardian recipients: {e}")
+
+        # 2. Active family members (excluding the ward themselves)
+        try:
+            membership_res = service_client.table("family_members").select("family_id").eq("user_id", user.id).eq("status", "active").execute()
+            if membership_res.data:
+                family_id = membership_res.data[0]["family_id"]
+                members_res = service_client.table("family_members").select(
+                    "user_id, profiles:user_id(id, full_name, phone, email)"
+                ).eq("family_id", family_id).eq("status", "active").neq("user_id", user.id).execute()
+
+                for row in members_res.data or []:
+                    prof = normalize_profile(row.get("profiles", {}))
+                    mid = prof.get("id") or row.get("user_id")
+                    if mid and mid not in seen_ids:
+                        seen_ids.add(mid)
+                        recipients.append({
+                            "user_id": mid,
+                            "name": prof.get("full_name") or "Unknown",
+                            "email": prof.get("email") or "",
+                            "phone": prof.get("phone") or "",
+                            "source": "family",
+                            "family_id": family_id,
+                        })
+        except Exception as e:
+            logger.warning(f"Could not fetch family recipients: {e}")
+
+        return recipients
+
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
+    except Exception as e:
+        logger.exception("Failed to fetch safety recipients")
+        raise HTTPException(status_code=500, detail="Could not fetch safety recipients")

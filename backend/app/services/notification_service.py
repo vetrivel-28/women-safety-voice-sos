@@ -96,7 +96,8 @@ class NotificationService:
         logger.info(f"[MOCK PUSH] To: {token} | Body: {message}")
         return "SENT"
 
-    def notify_all_guardians(self, user_id: str, alert_type: str, user: Any, location: Dict[str, Any] = None) -> list:
+    def notify_all_guardians(self, user_id: str, alert_type: str, user: Any, location: Dict[str, Any] = None, alert_id: str = None) -> list:
+        """Notifies emergency contacts (SMS) AND linked app guardians (in_app_notifications)."""
         try:
             from app.db.client import get_service_role_client
             service_client = get_service_role_client()
@@ -108,12 +109,70 @@ class NotificationService:
             
         results = []
         for contact in contacts:
-            # Avoid duplicate primary notifications if we handled it in the route
-            # But here we just notify everyone found in DB
             res = self.notify_guardian(contact, alert_type, user, location)
             results.append(res)
+
+        # Also push in_app_notifications to linked app guardians
+        self._notify_linked_guardians_in_app(
+            user_id=user_id,
+            alert_type=alert_type,
+            user=user,
+            location=location,
+            alert_id=alert_id,
+        )
             
         return results
+
+    def _notify_linked_guardians_in_app(self, user_id: str, alert_type: str, user: Any,
+                                         location: Dict[str, Any] = None, alert_id: str = None):
+        """Insert in_app_notifications for every active guardian linked to the ward."""
+        try:
+            from app.db.client import get_service_role_client
+            service_client = get_service_role_client()
+
+            links_res = service_client.table("guardian_links").select("guardian_user_id").eq("user_id", user_id).eq("status", "ACTIVE").execute()
+            guardian_ids = [row["guardian_user_id"] for row in (links_res.data or [])]
+            if not guardian_ids:
+                return
+
+            # Resolve ward display name
+            ward_name = getattr(user, 'email', None) or user_id
+            try:
+                wp = service_client.table("profiles").select("full_name, email").eq("id", user_id).execute()
+                if wp.data:
+                    ward_name = wp.data[0].get("full_name") or wp.data[0].get("email") or ward_name
+            except Exception:
+                pass
+
+            action_label = {
+                "MANUAL_SOS": "triggered an SOS alert",
+                "SILENT_SOS": "triggered a silent SOS alert",
+                "JOURNEY_MISSED_CHECKIN": "missed a journey check-in",
+                "DEAD_MAN_MISSED": "missed a check-in timer",
+                "SAFE_WINDOW_MISSED": "missed a safe window check-in",
+            }.get(alert_type, f"triggered {alert_type}")
+
+            for guardian_id in guardian_ids:
+                try:
+                    service_client.table("in_app_notifications").insert({
+                        "user_id": guardian_id,
+                        "actor_user_id": user_id,
+                        "alert_id": alert_id,
+                        "type": f"ward_{alert_type.lower()}",
+                        "title": "Ward alert",
+                        "message": f"{ward_name} {action_label}.",
+                        "metadata": {
+                            "trigger_type": alert_type,
+                            "ward_id": user_id,
+                            "ward_name": ward_name,
+                            "alert_id": alert_id,
+                            "location": location,
+                        },
+                    }).execute()
+                except Exception as e:
+                    logger.warning(f"Failed to insert in_app_notification for guardian {guardian_id}: {e}")
+        except Exception as e:
+            logger.error(f"_notify_linked_guardians_in_app failed: {e}")
 
     def notify_family_members(self, user_id: str, alert_type: str, user: Any, location: Dict[str, Any] = None, alert_id: str = None) -> list:
         try:
@@ -133,22 +192,65 @@ class NotificationService:
             if not other_member_ids:
                 return []
 
-            # Queue offline notifications in family_notification_events
+            # Resolve ward display name
+            ward_name = getattr(user, 'email', None) or user_id
+            try:
+                wp = service_client.table("profiles").select("full_name, email").eq("id", user_id).execute()
+                if wp.data:
+                    ward_name = wp.data[0].get("full_name") or wp.data[0].get("email") or ward_name
+            except Exception:
+                pass
+
+            action_label = {
+                "MANUAL_SOS": "triggered an SOS",
+                "SILENT_SOS": "triggered a silent SOS",
+                "JOURNEY_MISSED_CHECKIN": "missed a journey check-in",
+                "DEAD_MAN_MISSED": "missed a check-in timer",
+                "SAFE_WINDOW_MISSED": "missed a safe window check-in",
+            }.get(alert_type, f"triggered {alert_type}")
+
+            # Write both family_notification_events AND in_app_notifications
             results = []
             for member_id in other_member_ids:
-                event_data = {
-                    "family_id": family_id,
-                    "user_id": member_id,
-                    "type": "FAMILY_SOS",
-                    "payload": {
-                        "trigger_type": alert_type,
-                        "triggered_by_user_id": user_id,
-                        "location": location,
-                        "alert_id": alert_id
-                    },
-                    "status": "queued"
-                }
-                service_client.table("family_notification_events").insert(event_data).execute()
+                # family_notification_events (offline queue)
+                try:
+                    event_data = {
+                        "family_id": family_id,
+                        "user_id": member_id,
+                        "type": "FAMILY_SOS",
+                        "payload": {
+                            "trigger_type": alert_type,
+                            "triggered_by_user_id": user_id,
+                            "location": location,
+                            "alert_id": alert_id,
+                        },
+                        "status": "queued",
+                    }
+                    service_client.table("family_notification_events").insert(event_data).execute()
+                except Exception as e:
+                    logger.warning(f"Failed to insert family_notification_events: {e}")
+
+                # in_app_notifications (bell icon)
+                try:
+                    service_client.table("in_app_notifications").insert({
+                        "user_id": member_id,
+                        "actor_user_id": user_id,
+                        "alert_id": alert_id,
+                        "type": f"family_{alert_type.lower()}",
+                        "title": "Family alert",
+                        "message": f"{ward_name} {action_label}.",
+                        "metadata": {
+                            "trigger_type": alert_type,
+                            "ward_id": user_id,
+                            "ward_name": ward_name,
+                            "family_id": family_id,
+                            "alert_id": alert_id,
+                            "location": location,
+                        },
+                    }).execute()
+                except Exception as e:
+                    logger.warning(f"Failed to insert in_app_notification for family member {member_id}: {e}")
+
                 results.append({"user_id": member_id, "status": "queued"})
                 
             return results
