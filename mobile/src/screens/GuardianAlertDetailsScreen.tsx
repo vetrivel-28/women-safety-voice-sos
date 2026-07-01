@@ -39,7 +39,7 @@ export const GuardianAlertDetailsScreen: React.FC = () => {
   const handleCall = () => {
     if (phone) {
       Linking.openURL(`tel:${phone}`).catch(() => Alert.alert('Could not launch dialer'));
-      handleAction('CALLED_USER', true);
+      handleAction('CALLED_WARD', true);
     } else {
       Alert.alert('Phone number unavailable.');
     }
@@ -51,7 +51,7 @@ export const GuardianAlertDetailsScreen: React.FC = () => {
       Linking.openURL(`sms:${phone}?body=${body}`).catch(() => {
         Linking.openURL(`sms:${phone}`).catch(() => Alert.alert('Could not launch SMS'));
       });
-      handleAction('SENT_MESSAGE', true);
+      handleAction('MESSAGED_WARD', true);
     } else {
       Alert.alert('Phone number unavailable.');
     }
@@ -64,7 +64,7 @@ export const GuardianAlertDetailsScreen: React.FC = () => {
       Linking.openURL(`whatsapp://send?phone=${normalizedPhone}&text=${encodedMessage}`).catch(() => {
         Linking.openURL(`https://wa.me/${normalizedPhone}?text=${encodedMessage}`).catch(() => Alert.alert('WhatsApp is not available on this device.'));
       });
-      handleAction('SENT_MESSAGE', true);
+      handleAction('MESSAGED_WARD', true);
     } else {
       Alert.alert('Phone number unavailable.');
     }
@@ -197,7 +197,7 @@ export const GuardianAlertDetailsScreen: React.FC = () => {
 
   const handleDismiss = async () => {
     if (alert) {
-      await handleAction('DISMISSED', true);
+      await handleAction('DISMISSED_ALERT', true);
       dismissAlert(alert.id);
     }
     navigation.goBack();
@@ -302,7 +302,7 @@ export const GuardianAlertDetailsScreen: React.FC = () => {
           <>
             <SectionHeader title="Acknowledge Alert" />
             <View style={styles.responseActionWrap}>
-              <TouchableOpacity disabled={isSendingAction} style={[styles.responseActionButton, { backgroundColor: '#F3F4F6' }]} onPress={() => handleAction('MARK_VIEWED')}>
+              <TouchableOpacity disabled={isSendingAction} style={[styles.responseActionButton, { backgroundColor: '#F3F4F6' }]} onPress={() => handleAction('VIEWED_ALERT')}>
                 <Text style={styles.responseActionText}>👁️ Mark Viewed</Text>
               </TouchableOpacity>
               <TouchableOpacity disabled={isSendingAction} style={[styles.responseActionButton, { backgroundColor: '#DBEAFE' }]} onPress={() => handleAction('I_AM_RESPONDING')}>

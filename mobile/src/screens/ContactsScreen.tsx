@@ -39,23 +39,31 @@ export const ContactsScreen: React.FC = () => {
   const [myGuardianCode, setMyGuardianCode] = useState('');
   const [myGuardians, setMyGuardians] = useState<any[]>([]);
   const [watching, setWatching] = useState<any[]>([]);
+  const [codeError, setCodeError] = useState(false);
+  const [codeLoading, setCodeLoading] = useState(true);
 
   useEffect(() => {
     fetchGuardianData();
   }, []);
 
   const fetchGuardianData = async () => {
+    setCodeLoading(true);
+    setCodeError(false);
     try {
       const codeRes = await apiClient.get('/api/guardians/me/code');
-      setMyGuardianCode(codeRes.data.ward_code || codeRes.data.guardian_code);
+      const wardCode = codeRes.data.ward_code || codeRes.data.code || codeRes.data.guardian_code || '';
+      setMyGuardianCode(wardCode);
 
       const guardiansRes = await apiClient.get('/api/guardians');
-      setMyGuardians(guardiansRes.data);
+      setMyGuardians(guardiansRes.data || []);
 
       const watchingRes = await apiClient.get('/api/guardians/watching');
-      setWatching(watchingRes.data);
+      setWatching(watchingRes.data || []);
     } catch (e) {
       console.warn("Failed to fetch guardian data", e);
+      setCodeError(true);
+    } finally {
+      setCodeLoading(false);
     }
   };
 
@@ -73,12 +81,8 @@ export const ContactsScreen: React.FC = () => {
       const val = inputValue.trim();
       if (/^[0-9]{6}$/.test(val)) {
         payload = { ward_code: val };
-      } else if (val.includes('@')) {
-        payload = { guardian_email: val };
-      } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)) {
-        payload = { guardian_user_id: val };
       } else {
-        Alert.alert('Validation Error', 'Input must be exactly 6 digits, an email, or User ID.');
+        Alert.alert('Validation Error', 'Input must be exactly 6 digits.');
         setIsLinking(false);
         return;
       }
@@ -207,32 +211,30 @@ export const ContactsScreen: React.FC = () => {
 
           <SectionHeader title="My Ward Code" subtitle="Share this 6-digit code with your guardian so they can monitor you." />
           <View style={styles.formCard}>
-            <Text style={styles.codeText}>
-              {myGuardianCode ? `${myGuardianCode.slice(0, 3)} ${myGuardianCode.slice(3)}` : "Loading..."}
-            </Text>
+            {codeLoading ? (
+              <Text style={[styles.codeText, { fontSize: 16, color: '#94A3B8' }]}>Loading ward code...</Text>
+            ) : codeError ? (
+              <View style={{ alignItems: 'center' }}>
+                <Text style={{ color: '#EF4444', marginBottom: 8, fontSize: 14 }}>Could not load ward code.</Text>
+                <PrimaryButton title="Retry" onPress={fetchGuardianData} variant="outline" style={{ width: 120 }} />
+              </View>
+            ) : myGuardianCode ? (
+              <Text style={styles.codeText}>
+                {myGuardianCode.slice(0, 3)} {myGuardianCode.slice(3)}
+              </Text>
+            ) : (
+              <View style={{ alignItems: 'center' }}>
+                <Text style={{ color: '#EF4444', marginBottom: 8, fontSize: 14 }}>Ward code not available.</Text>
+                <PrimaryButton title="Retry" onPress={fetchGuardianData} variant="outline" style={{ width: 120 }} />
+              </View>
+            )}
           </View>
 
-          <SectionHeader title="My Guardians (App Users)" subtitle="Users who can monitor your live alerts remotely." />
+          <SectionHeader title="My Guardians" subtitle="App users who are monitoring you via your ward code." />
           <View style={styles.formCard}>
-            <Text style={styles.inputLabel}>Ward Code, Email, or ID *</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. 123456 or email"
-              placeholderTextColor="#94A3B8"
-              keyboardType="default"
-              autoCapitalize="none"
-              value={linkEmail}
-              onChangeText={setLinkEmail}
-            />
-            <PrimaryButton 
-              title={isLinking ? "Linking..." : "Add Guardian"} 
-              onPress={() => handleLinkGuardian(linkEmail)} 
-              variant="primary" 
-            />
-            
-            <View style={{ marginTop: 16 }}>
+            <View style={{ marginTop: 0 }}>
               {myGuardians.length === 0 ? (
-                <Text style={styles.note}>No app guardians linked yet.</Text>
+                <Text style={styles.note}>No guardians linked yet. Share your ward code above.</Text>
               ) : (
                 myGuardians.map(g => (
                   <View key={g.id} style={styles.linkedCard}>
@@ -245,10 +247,33 @@ export const ContactsScreen: React.FC = () => {
             </View>
           </View>
 
-          <SectionHeader title="People I'm Guarding" subtitle="Users who have added you as their guardian." />
+          <SectionHeader title="Add a Ward" subtitle="Enter a ward's 6-digit code to start monitoring them." />
+          <View style={styles.formCard}>
+            <Text style={styles.inputLabel}>Ward Code *</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. 123456"
+              placeholderTextColor="#94A3B8"
+              keyboardType="numeric"
+              maxLength={6}
+              autoCapitalize="none"
+              value={linkEmail}
+              onChangeText={setLinkEmail}
+            />
+            <Text style={{ fontSize: 12, color: '#94A3B8', marginBottom: 12, marginLeft: 4 }}>
+              Ask the person you want to monitor to share their ward code with you.
+            </Text>
+            <PrimaryButton
+              title={isLinking ? "Linking..." : "Start Monitoring Ward"}
+              onPress={() => handleLinkGuardian(linkEmail)}
+              variant="primary"
+            />
+          </View>
+
+          <SectionHeader title="My Wards" subtitle="People you are currently monitoring." />
           <View style={[styles.formCard, { marginBottom: 40 }]}>
             {watching.length === 0 ? (
-               <Text style={styles.note}>You are not guarding anyone yet.</Text>
+               <Text style={styles.note}>No wards linked yet. Add a ward above using their 6-digit code.</Text>
             ) : (
                watching.map(w => (
                  <View key={w.id} style={styles.linkedCard}>

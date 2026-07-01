@@ -238,9 +238,7 @@ export const AlertProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
-      if (state.isConnected && isLoaded && currentUserId) {
-        retryPendingAlerts();
-      }
+      // Intentionally not auto-retrying here to prevent accidental SOS without user consent
     });
     return () => unsubscribe();
   }, [isLoaded, currentUserId]);

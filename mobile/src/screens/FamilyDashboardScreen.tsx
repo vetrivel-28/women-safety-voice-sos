@@ -13,7 +13,7 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'FamilyDashb
 
 export default function FamilyDashboardScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { family, members, joinRequests, activeSOS, activeJourneys, loading, refresh, approveJoin, rejectJoin, myPendingRequest } = useFamily();
+  const { family, members, joinRequests, activeSOS, activeJourneys, loading, refresh, approveJoin, rejectJoin, myPendingRequest, pendingFamilyName } = useFamily();
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   
   useEffect(() => {
@@ -40,7 +40,7 @@ export default function FamilyDashboardScreen() {
         <View style={styles.center}>
           <Text style={styles.title}>Request Pending</Text>
           <Text style={styles.subtitle}>
-            Waiting for host approval to join "{myPendingRequest.families?.family_name || 'the family'}".
+            Waiting for host approval to join "{pendingFamilyName || 'the family'}".
           </Text>
           <PrimaryButton 
              title="Check Status" 

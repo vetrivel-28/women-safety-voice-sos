@@ -7,7 +7,7 @@ import { useFamily } from '../context/FamilyContext';
 
 export default function JoinFamilyScreen() {
   const navigation = useNavigation();
-  const { joinFamily, family, myPendingRequest, loading: contextLoading } = useFamily();
+  const { joinFamily, family, myPendingRequest, pendingFamilyName, loading: contextLoading } = useFamily();
   const [pin, setPin] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,18 +24,23 @@ export default function JoinFamilyScreen() {
       setError('Please enter a 6-digit PIN');
       return;
     }
-    
+
     setLoading(true);
     setError(null);
     try {
       await joinFamily(pin);
-      // Wait for fetchDashboard to finish (joinFamily calls it)
-      // The myPendingRequest state will be updated.
+      // joinFamily calls fetchDashboard; myPendingRequest will update to show pending state
     } catch (e: any) {
-      if (e.response && e.response.data && e.response.data.detail) {
-        setError(e.response.data.detail);
+      const detail = e.response?.data?.detail || e.message || '';
+      if (detail === 'Join request already pending') {
+        // Friendly message — not an error, just refresh state
+        await import('../context/FamilyContext').then(() => {});
+        // The context refresh will set myPendingRequest so the UI transitions automatically
+        setError('Your join request is already pending approval. Waiting for the host to approve.');
+      } else if (detail === 'You are already in an active family') {
+        setError('You are already a member of a family. Leave your current family first.');
       } else {
-        setError(e.message || 'Failed to join family. Please try again.');
+        setError(detail || 'Failed to join family. Please try again.');
       }
     } finally {
       setLoading(false);
@@ -58,7 +63,7 @@ export default function JoinFamilyScreen() {
         <View style={styles.center}>
           <Text style={styles.title}>Request Sent</Text>
           <Text style={styles.subtitle}>
-            Waiting for host approval to join "{myPendingRequest.families?.family_name || 'the family'}".
+            Waiting for host approval to join "{pendingFamilyName || 'the family'}".
           </Text>
           <Text style={styles.hint}>
             The host has been notified. You'll gain access once they approve your request.

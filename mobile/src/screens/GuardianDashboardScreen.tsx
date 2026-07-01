@@ -89,13 +89,13 @@ export const GuardianDashboardScreen: React.FC = () => {
         }
       >
         <Text style={styles.title}>Guardian Command Center</Text>
-        <Text style={styles.sectionHeader}>People I'm Guarding</Text>
+        <Text style={styles.sectionHeader}>My Wards</Text>
 
         {showEmptyState ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyIcon}>🛡️</Text>
-            <Text style={styles.emptyTitle}>You are not guarding anyone yet</Text>
-            <Text style={styles.emptyText}>When someone adds you as a guardian, they will appear here.</Text>
+            <Text style={styles.emptyTitle}>No wards linked yet</Text>
+            <Text style={styles.emptyText}>Go to Trusted Guardians and use "Add a Ward" to enter someone's ward code. They will appear here once linked.</Text>
           </View>
         ) : (
           <View style={styles.tileGrid}>

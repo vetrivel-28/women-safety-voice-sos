@@ -30,19 +30,20 @@ export interface JoinRequest {
   family_id: string;
   requester_user_id: string;
   status: 'pending' | 'approved' | 'rejected';
-  requested_at: string;
-  profiles?: {
-    id: string;
-    email: string;
-    full_name: string;
+  created_at: string;
+  responded_at?: string | null;
+  // Embedded family name (from /my/current pending response)
+  families?: {
+    family_name: string;
   };
 }
 
 interface FamilyContextData {
   family: Family | null;
   members: FamilyMember[];
-  joinRequests: JoinRequest[];
-  myPendingRequest: JoinRequest | null;
+  joinRequests: JoinRequest[];   // pending requests visible to the host
+  myPendingRequest: JoinRequest | null;  // the current user's own pending request
+  pendingFamilyName: string;     // family name for pending request screen
   activeSOS: any[];
   activeJourneys: any[];
   loading: boolean;
@@ -61,6 +62,7 @@ const FamilyContext = createContext<FamilyContextData>({
   members: [],
   joinRequests: [],
   myPendingRequest: null,
+  pendingFamilyName: '',
   activeSOS: [],
   activeJourneys: [],
   loading: true,
@@ -79,14 +81,19 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [myPendingRequest, setMyPendingRequest] = useState<JoinRequest | null>(null);
+  const [pendingFamilyName, setPendingFamilyName] = useState('');
   const [activeSOS, setActiveSOS] = useState<any[]>([]);
   const [activeJourneys, setActiveJourneys] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   const currentFamilyIdRef = useRef<string | null>(null);
   const channelRef = useRef<any>(null);
+  const fetchInFlightRef = useRef(false);
 
   const fetchDashboard = async () => {
+    // Prevent concurrent fetches
+    if (fetchInFlightRef.current) return;
+    fetchInFlightRef.current = true;
     try {
       setLoading(true);
       const { data: { session } } = await supabase.auth.getSession();
@@ -95,71 +102,80 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return;
       }
 
-      // Fetch my current family membership and family details
+      // Single backend call gives us: null | {status:'pending',...} | active membership
       const response = await apiClient.get('/api/family/my/current');
-      
-      if (!response.data) {
-        // No active family. Check if we have a pending join request.
-        const { data: pendingReqs } = await supabase
-          .from('family_join_requests')
-          .select('*, families(family_name)')
-          .eq('requester_user_id', session.user.id)
-          .eq('status', 'pending');
-          
-        if (pendingReqs && pendingReqs.length > 0) {
-           setMyPendingRequest(pendingReqs[0] as any);
-        } else {
-           setMyPendingRequest(null);
-        }
-        
-        // Ensure state is cleared for active family data
+      const payload = response.data;
+
+      // ── Case 1: no family, no pending request ──────────────────────────────
+      if (!payload) {
+        setFamily(null);
+        setMembers([]);
+        setJoinRequests([]);
+        setActiveSOS([]);
+        setActiveJourneys([]);
+        setMyPendingRequest(null);
+        setPendingFamilyName('');
+        currentFamilyIdRef.current = null;
+        return;
+      }
+
+      // ── Case 2: pending join request ───────────────────────────────────────
+      if (payload.status === 'pending') {
         setFamily(null);
         setMembers([]);
         setJoinRequests([]);
         setActiveSOS([]);
         setActiveJourneys([]);
         currentFamilyIdRef.current = null;
+        setMyPendingRequest(payload.join_request as JoinRequest);
+        setPendingFamilyName(payload.family_name || '');
         return;
       }
 
+      // ── Case 3: active membership row (contains embedded families object) ──
       setMyPendingRequest(null);
-      const myMembership = response.data;
-      const fam = myMembership.families;
-      
+      setPendingFamilyName('');
+
+      const fam: Family = payload.families;
+      if (!fam) {
+        // Malformed response — treat as no family
+        clearState();
+        return;
+      }
+
       setFamily(fam);
       currentFamilyIdRef.current = fam.id;
 
-      // Fetch dashboard data
+      // Dashboard data (sos + journeys)
       const dashResponse = await apiClient.get(`/api/family/${fam.id}/dashboard`);
       setActiveSOS(dashResponse.data.active_sos || []);
       setActiveJourneys(dashResponse.data.active_journeys || []);
-      
-      // We only have user profiles in dashboard currently, let's fetch full members list for dashboard cards
+
+      // Members list
       const membersResponse = await apiClient.get(`/api/family/${fam.id}/members`);
       setMembers(membersResponse.data || []);
 
-      // If host, fetch join requests
+      // If host, fetch pending join requests from backend (no direct Supabase needed)
       if (fam.host_user_id === session.user.id) {
-        // Fallback to supabase directly for requests since we didn't expose a specific endpoint for fetching them in backend,
-        const { data: reqs } = await supabase
-          .from('family_join_requests')
-          .select('*, profiles:requester_user_id(id, email, full_name)')
-          .eq('family_id', fam.id)
-          .eq('status', 'pending');
-        setJoinRequests(reqs || []);
+        try {
+          const reqsResponse = await apiClient.get(`/api/family/${fam.id}/join-requests`);
+          setJoinRequests(reqsResponse.data || []);
+        } catch {
+          setJoinRequests([]);
+        }
       } else {
         setJoinRequests([]);
       }
 
     } catch (e: any) {
       if (e.response?.status === 404 || e.response?.status === 403) {
-        // User likely was removed or left
         clearState();
       } else {
         console.error('[FamilyContext] fetchDashboard Error:', e);
       }
     } finally {
       setLoading(false);
+      fetchInFlightRef.current = false;
     }
   };
 
@@ -168,13 +184,15 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setMembers([]);
     setJoinRequests([]);
     setMyPendingRequest(null);
+    setPendingFamilyName('');
     setActiveSOS([]);
     setActiveJourneys([]);
     currentFamilyIdRef.current = null;
     setLoading(false);
+    fetchInFlightRef.current = false;
   };
 
-  // Realtime subscription management
+  // Initial load + realtime subscriptions
   useEffect(() => {
     fetchDashboard();
 
@@ -182,23 +200,13 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
       }
-
-      channelRef.current = supabase.channel('family_module_updates')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'family_members' }, () => {
-          fetchDashboard();
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'family_join_requests' }, () => {
-          fetchDashboard();
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'sos_alerts' }, () => {
-          fetchDashboard();
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'journey_sessions' }, () => {
-          fetchDashboard();
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'families' }, () => {
-          fetchDashboard();
-        })
+      channelRef.current = supabase
+        .channel('family_module_updates')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'family_members' }, fetchDashboard)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'family_join_requests' }, fetchDashboard)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'sos_alerts' }, fetchDashboard)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'safe_windows' }, fetchDashboard)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'families' }, fetchDashboard)
         .subscribe();
     };
 
@@ -242,7 +250,7 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const leaveFamily = async () => {
     if (!family) return;
     await apiClient.post(`/api/family/${family.id}/leave`);
-    clearState(); // force clear immediately instead of waiting for fetch
+    clearState();
     await fetchDashboard();
   };
 
@@ -258,6 +266,7 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       members,
       joinRequests,
       myPendingRequest,
+      pendingFamilyName,
       activeSOS,
       activeJourneys,
       loading,

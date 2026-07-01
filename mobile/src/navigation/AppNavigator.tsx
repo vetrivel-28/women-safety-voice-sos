@@ -172,6 +172,9 @@ export const AppNavigator = () => {
           <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'Notifications' }} />
           
           {/* Family Screens */}
+          {/* FamilyDashboard must be registered in the Stack so navigate('FamilyDashboard') works
+              from anywhere, even though it is also the FamilyTab content in MainTabs. */}
+          <Stack.Screen name="FamilyDashboard" component={FamilyDashboardScreen} options={{ title: 'Family', headerShown: false }} />
           <Stack.Screen name="FamilyLiveMap" component={FamilyLiveMapScreen} options={{ title: 'Family Live Map' }} />
           <Stack.Screen name="FamilyMembers" component={FamilyMembersScreen} options={{ title: 'Manage Members' }} />
           <Stack.Screen name="FamilySettings" component={FamilySettingsScreen} options={{ title: 'Family Settings' }} />

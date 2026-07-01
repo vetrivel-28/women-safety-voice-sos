@@ -6,9 +6,10 @@ import { InAppNotificationBanner } from '../components/InAppNotificationBanner';
 export interface AppNotification {
   id: string;
   created_at: string;
-  status: string;
+  read_at: string | null;
+  type: string;
+  title: string;
   message: string;
-  recipient: string;
   metadata: any;
 }
 
@@ -28,8 +29,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [activeBanner, setActiveBanner] = useState<AppNotification | null>(null);
   const seenIds = useRef<Set<string>>(new Set());
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = async (force = false) => {
     try {
+      // First check if logged in
+      const { data: { session } } = await import('../lib/supabaseClient').then(m => m.supabase.auth.getSession());
+      if (!session) return; // Stop polling if not logged in
+
       const res = await apiClient.get('/api/notifications');
       const data = res.data || [];
       setNotifications(data);
@@ -39,7 +44,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       setUnreadCount(count);
 
       // Show banner for new unread notifications
-      const newUnread = data.filter((n: AppNotification) => n.status === 'UNREAD');
+      const newUnread = data.filter((n: AppNotification) => !n.read_at);
       if (newUnread.length > 0) {
         const latest = newUnread[0];
         if (!seenIds.current.has(latest.id)) {
@@ -48,8 +53,19 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
           setTimeout(() => setActiveBanner(null), 4000);
         }
       }
-    } catch (e) {
-      console.warn('Failed to fetch notifications', e);
+    } catch (e: any) {
+      const httpStatus = e.response?.status;
+      const isPermissionError = e.response?.data?.error === 'notifications_unavailable';
+
+      if (isPermissionError || httpStatus === 503) {
+        // Log once — don't spam. The backend already logged the DB permission error.
+        console.warn('[Notifications] Notifications temporarily unavailable (backend 503 or permissions issue).');
+        return;
+      }
+      // Avoid spamming logs for expected transient failures
+      if (httpStatus !== 500 && httpStatus !== 401) {
+        console.warn('[Notifications] Failed to fetch notifications:', e.message || e);
+      }
     }
   };
 
@@ -93,7 +109,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       {children}
       {activeBanner && (
         <InAppNotificationBanner 
-          title={activeBanner.recipient} 
+          title={activeBanner.title} 
           message={activeBanner.message} 
           onClose={() => setActiveBanner(null)} 
         />

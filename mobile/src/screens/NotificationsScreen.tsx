@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNotifications } from '../context/NotificationContext';
 import { PrimaryButton } from '../components/PrimaryButton';
 
@@ -8,11 +9,11 @@ export const NotificationsScreen: React.FC = () => {
 
   const renderItem = ({ item }: { item: any }) => (
     <TouchableOpacity 
-      style={[styles.card, item.status === 'UNREAD' && styles.unreadCard]}
+      style={[styles.card, !item.read_at && styles.unreadCard]}
       onPress={() => markAsRead(item.id)}
     >
       <View style={styles.cardHeader}>
-        <Text style={styles.title}>{item.recipient || 'Notification'}</Text>
+        <Text style={styles.title}>{item.title || 'Notification'}</Text>
         <Text style={styles.time}>{new Date(item.created_at).toLocaleTimeString()}</Text>
       </View>
       <Text style={styles.message}>{item.message}</Text>
