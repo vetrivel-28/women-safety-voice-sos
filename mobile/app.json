@@ -52,6 +52,18 @@
           "icon": "./assets/icon.png",
           "color": "#DC2626"
         }
+      ],
+      [
+        "@config-plugins/react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": [
+            "peripheral",
+            "central"
+          ],
+          "bluetoothAlwaysPermission": "Allow SafeHer to connect to your Smart Ring.",
+          "bluetoothPeripheralPermission": "Allow SafeHer to connect to your Smart Ring."
+        }
       ]
     ]
   }

@@ -33,7 +33,8 @@ export type TriggerType =
   | 'JOURNEY_MISSED_CHECKIN'
   | 'DEAD_MAN_MISSED'
   | 'GUARDIAN_NOTIFICATION_FAILED'
-  | 'GUARDIAN_NOTIFICATION_SENT';
+  | 'GUARDIAN_NOTIFICATION_SENT'
+  | 'HARDWARE_SOS';
 
 export interface SOSAlert {
   id: string;
