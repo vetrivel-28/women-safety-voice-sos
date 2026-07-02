@@ -33,15 +33,12 @@ void onButtonPress(uint8_t pressType) {
 }
 
 // Callback when data is received over BLE (e.g. from Phone)
-void onBleRx(const std::string& rxValue) {
+void onBleRx(const String& rxValue) {
     Serial.print("Received Value: ");
-    for (int i = 0; i < rxValue.length(); i++) {
-        Serial.print(rxValue[i]);
-    }
-    Serial.println();
+    Serial.println(rxValue);
 
     // The app sends "ACK" when the SOS is processed
-    if (rxValue.find("ACK") != std::string::npos) {
+    if (rxValue.indexOf("ACK") != -1) {
         // Vibrate twice to acknowledge successful SOS dispatch
         static const uint16_t ackPattern[] = {200, 200, 200, 200}; // On 200, Off 200, On 200, Off 200
         motor.vibratePattern(ackPattern, 4);

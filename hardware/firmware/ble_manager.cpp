@@ -8,10 +8,10 @@ class ServerCallbacks: public BLEServerCallbacks {
 public:
     ServerCallbacks(BLEManager* manager) : _manager(manager) {}
     void onConnect(BLEServer* pServer) {
-        _manager->_deviceConnected = true;
+        _manager->_setConnected(true);
     }
     void onDisconnect(BLEServer* pServer) {
-        _manager->_deviceConnected = false;
+        _manager->_setConnected(false);
     }
 };
 
@@ -20,9 +20,9 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
 public:
     CharacteristicCallbacks(BLEManager* manager) : _manager(manager) {}
     void onWrite(BLECharacteristic *pCharacteristic) {
-        std::string rxValue = pCharacteristic->getValue();
-        if (rxValue.length() > 0 && _manager->_rxCallback) {
-            _manager->_rxCallback(rxValue);
+        String rxValue = pCharacteristic->getValue();
+        if (rxValue.length() > 0) {
+            _manager->_handleRx(rxValue);
         }
     }
 };
@@ -68,7 +68,7 @@ void BLEManager::setRxCallback(RxCallback cb) {
     _rxCallback = cb;
 }
 
-void BLEManager::notifyClient(const std::string& message) {
+void BLEManager::notifyClient(const String& message) {
     if (_deviceConnected && _pTxCharacteristic) {
         _pTxCharacteristic->setValue(message);
         _pTxCharacteristic->notify();
