@@ -34,6 +34,14 @@ class SafeHerMicrophoneService : Service() {
     private var sequenceNumber = 0
     private var activeGeneration: Int = -1
 
+    // POC 3A Detector State
+    private val calibrationBuffer = DoubleArray(5)
+    private var noiseFloor = 0.001
+    private var currentClassification = "CALIBRATING"
+    private var activeCount = 0
+    private var quietCount = 0
+    private var sustainedLoudCount = 0
+
     enum class ServiceState {
         IDLE, START_REQUESTED, RUNNING, STOP_REQUESTED
     }
@@ -48,6 +56,20 @@ class SafeHerMicrophoneService : Service() {
         const val CHANNEL_ID = "voice_monitoring_channel"
         const val ACTION_START = "com.safeher.app.START_MIC"
         const val ACTION_STOP = "com.safeher.app.STOP_MIC"
+
+        // POC 3A Constants
+        const val CALIBRATION_CHUNKS = 5
+        const val MIN_NOISE_FLOOR = 0.001
+        const val MAX_NOISE_FLOOR = 0.05
+        const val ALPHA_DOWN = 0.2
+        const val ALPHA_UP = 0.02
+        const val NOISE_UPDATE_MULTI = 2.0
+        const val ACTIVE_RMS_MULTI = 3.0
+        const val LOUD_RMS_ABS = 0.15
+        const val LOUD_PEAK_ABS = 0.8
+        const val ACTIVE_PERSIST = 3
+        const val QUIET_PERSIST = 5
+        const val SUSTAINED_LOUD_PERSIST = 2
         
         // This holds a static reference to the React Context purely to emit events.
         // It should be set by the Module when it starts.
@@ -161,6 +183,13 @@ class SafeHerMicrophoneService : Service() {
             
             isCapturing = true
             sequenceNumber = 0
+            
+            // POC 3A Reset
+            noiseFloor = MIN_NOISE_FLOOR
+            currentClassification = "CALIBRATING"
+            activeCount = 0
+            quietCount = 0
+            sustainedLoudCount = 0
 
             recordingThread = Thread {
                 readAudioData()
@@ -270,18 +299,64 @@ class SafeHerMicrophoneService : Service() {
             sumSquares += (sample.toDouble() * sample.toDouble())
         }
 
-        val rms = sqrt(sumSquares / chunk.size) / 32768.0
+        val normalizedPeak = peak / 32768.0
+        val normalizedRms = sqrt(sumSquares / chunk.size) / 32768.0
         sequenceNumber++
 
-        val formattedRms = String.format("%.4f", rms)
-        Log.i("SafeHerAudioPOC", "chunk=$sequenceNumber samples=${chunk.size} peak=$peak rms=$formattedRms")
+        if (sequenceNumber <= CALIBRATION_CHUNKS) {
+            calibrationBuffer[sequenceNumber - 1] = normalizedRms
+            currentClassification = "CALIBRATING"
+            if (sequenceNumber == CALIBRATION_CHUNKS) {
+                val sorted = calibrationBuffer.sorted()
+                val medianRms = sorted[2] // index 2 is median of 5 elements
+                noiseFloor = maxOf(MIN_NOISE_FLOOR, minOf(MAX_NOISE_FLOOR, medianRms))
+            }
+        } else {
+            val targetFloor = maxOf(MIN_NOISE_FLOOR, minOf(MAX_NOISE_FLOOR, normalizedRms))
+            
+            if (targetFloor <= noiseFloor) {
+                noiseFloor = (noiseFloor * (1 - ALPHA_DOWN)) + (targetFloor * ALPHA_DOWN)
+            } else if (normalizedRms < noiseFloor * NOISE_UPDATE_MULTI) {
+                noiseFloor = (noiseFloor * (1 - ALPHA_UP)) + (targetFloor * ALPHA_UP)
+            }
+            
+            val isImpulsiveLoud = (normalizedPeak >= LOUD_PEAK_ABS)
+            val isSustainedLoudCandidate = (normalizedRms >= LOUD_RMS_ABS)
+            val isActiveCandidate = (normalizedRms >= noiseFloor * ACTIVE_RMS_MULTI)
+
+            if (isSustainedLoudCandidate) sustainedLoudCount++ else sustainedLoudCount = 0
+            if (isActiveCandidate) activeCount++ else activeCount = 0
+            if (!isActiveCandidate && !isSustainedLoudCandidate && !isImpulsiveLoud) quietCount++ else quietCount = 0
+            
+            var nextClass = currentClassification
+            if (isImpulsiveLoud || sustainedLoudCount >= SUSTAINED_LOUD_PERSIST) {
+                nextClass = "LOUD_EVENT"
+                quietCount = 0
+            } else if (activeCount >= ACTIVE_PERSIST) {
+                nextClass = "ACTIVE_SOUND"
+            } else if (quietCount >= QUIET_PERSIST) {
+                nextClass = "QUIET"
+            }
+            currentClassification = nextClass
+        }
+
+        val calibrationProgress = minOf(CALIBRATION_CHUNKS, sequenceNumber)
+
+        val formattedRms = String.format("%.4f", normalizedRms)
+        val formattedPeak = String.format("%.4f", normalizedPeak)
+        val formattedFloor = String.format("%.4f", noiseFloor)
+        
+        Log.i("SafeHerAudioPOC", "chunk=$sequenceNumber pPeak=$formattedPeak pRms=$formattedRms floor=$formattedFloor calib=($calibrationProgress/$CALIBRATION_CHUNKS) quietCount=$quietCount activeCount=$activeCount susLoudCount=$sustainedLoudCount class=$currentClassification")
 
         val params = Arguments.createMap()
         params.putInt("sequenceNumber", sequenceNumber)
         params.putInt("sampleCount", chunk.size)
         params.putInt("peakAmplitude", peak)
-        params.putDouble("rms", rms)
+        params.putDouble("rms", normalizedRms)
         params.putDouble("timestamp", System.currentTimeMillis().toDouble())
+        params.putDouble("noiseFloor", noiseFloor)
+        params.putString("classification", currentClassification)
+        params.putInt("calibrationProgress", calibrationProgress)
 
         reactContext?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
             ?.emit("onAudioMetrics", params)
