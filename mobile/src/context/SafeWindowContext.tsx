@@ -6,20 +6,23 @@ import { distanceBetweenPointsMeters, isRouteDeviation } from '../utils/geoUtils
 import { useContacts } from './ContactsContext';
 import { getRoute } from '../services/geocodingService';
 import { startBackgroundLocationService, stopBackgroundLocationService } from '../services/backgroundLocation';
-import { Alert, AppState } from 'react-native';
+import { Alert, AppState, NativeModules, NativeEventEmitter, PermissionsAndroid, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { checkIsExempt, requestExemption } from '../modules/BatteryOptimization';
 import { scheduleLocalNotification, cancelLocalNotification } from '../services/notificationService';
 import { supabase } from '../lib/supabaseClient';
 import { apiClient } from '../api/client';
 
+const { SafeHerAudioModule } = NativeModules;
+const audioEmitter = SafeHerAudioModule ? new NativeEventEmitter(SafeHerAudioModule) : null;
+
 interface SafeWindowContextType {
   safeWindow: SafeWindowState;
   startSafeWindow: (
-    durationMinutes: SafeWindowDuration, 
+    durationMinutes: SafeWindowDuration,
     checkInMinutes: number,
-    startLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string},
-    destLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string}
+    startLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string },
+    destLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }
   ) => void;
   endSafeWindow: () => void;
   markCheckInSafe: () => void;
@@ -68,12 +71,52 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [batteryOptimizationDenied, setBatteryOptimizationDenied] = useState(false);
   const [isStartingJourney, setIsStartingJourney] = useState(false);
   const activeNotificationId = useRef<string | null>(null);
-  
+
   // Location Sync Refs
   const lastBackendSyncRef = useRef<number>(0);
-  const lastSyncedLocRef = useRef<{lat: number, lon: number} | null>(null);
-  const unsentLocRef = useRef<{lat: number, lon: number, accuracy?: number, captured_at?: string, provider?: string} | null>(null);
+  const lastSyncedLocRef = useRef<{ lat: number, lon: number } | null>(null);
+  const unsentLocRef = useRef<{ lat: number, lon: number, accuracy?: number, captured_at?: string, provider?: string } | null>(null);
   const isSyncingLocationRef = useRef(false);
+
+  // Voice SOS POC 2 State Listener
+  useEffect(() => {
+    if (!audioEmitter) return;
+    const metricSub = audioEmitter.addListener('onAudioMetrics', (event: any) => {
+      // Intentionally omitting raw console logs for production
+    });
+    const stateSub = audioEmitter.addListener('onVoiceMonitoringState', (event: any) => {
+      console.log(`[SafeHerAudioPOC] State changed: ${event.state}`);
+      if (event.state === 'MIC_START_FAILED') {
+        // Here we could handle UI contextually, but importantly, do not crash Location
+        console.warn("[SafeHerAudioPOC] Mic FGS failed to start, falling back to location only.");
+      }
+    });
+    return () => {
+      metricSub.remove();
+      stateSub.remove();
+    };
+  }, []);
+
+  // Explicit Voice SOS POC 2 Start/Stop commands
+  const startAudioCapture = async () => {
+    if (Platform.OS !== 'android' || !SafeHerAudioModule) return;
+    try {
+      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+      if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+        SafeHerAudioModule.startCapture();
+      } else {
+        console.warn("[VoicePOC] Microphone permission denied. Voice POC disabled.");
+      }
+    } catch (err) {
+      console.warn("[VoicePOC] Permission request failed", err);
+    }
+  };
+
+  const stopAudioCapture = () => {
+    if (Platform.OS === 'android' && SafeHerAudioModule) {
+      SafeHerAudioModule.stopCapture();
+    }
+  };
 
   const clearExistingNotification = async () => {
     if (activeNotificationId.current) {
@@ -86,10 +129,10 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     await clearExistingNotification();
     const dueTime = new Date(checkInDueAt).getTime();
     const now = new Date().getTime();
-    
+
     const warningLeadTimeMs = demoMode ? 5000 : 60000;
     const triggerInMs = (dueTime - now) - warningLeadTimeMs;
-    
+
     if (triggerInMs > 0) {
       const triggerInSecs = Math.floor(triggerInMs / 1000);
       const id = await scheduleLocalNotification(
@@ -109,7 +152,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const response = await apiClient.get('/api/journeys');
       const journeys = response.data;
       const active = journeys.find((j: any) => j.status === 'active');
-      
+
       if (active) {
         console.log(`[DEBUG] Restoring journey created by user: ${active.user_id}`);
         // Legacy fallback
@@ -119,7 +162,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const endsAtStr = active.ends_at || new Date(startedAt.getTime() + durationSecs * 1000).toISOString();
         const intervalMins = active.check_in_interval_minutes || 5;
         const checkInDueStr = active.check_in_due_at || new Date(startedAt.getTime() + intervalMins * 60000).toISOString();
-        
+
         setSafeWindow(prev => ({
           ...prev,
           journeyId: active.id,
@@ -136,16 +179,16 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           estimated_arrival_at: active.estimated_arrival_at,
           route_status: active.route_status,
         }));
-        
+
         missedTriggeredRef.current = false;
         completeInFlightRef.current = false;
         startBackgroundLocationService();
-        
+
         // Immediately check if already missed while app was closed
         if (now.getTime() >= new Date(checkInDueStr).getTime()) {
-           markMissedCheckIn(active.id);
+          markMissedCheckIn(active.id);
         } else if (now.getTime() >= new Date(endsAtStr).getTime()) {
-           endSafeWindow(active.id);
+          endSafeWindow(active.id);
         }
 
       } else if (Array.isArray(journeys)) {
@@ -155,6 +198,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           }
           return initialState;
         });
+        // Defensive kill: backend says no journey active
+        stopAudioCapture();
       }
     } catch (e: any) {
       if (e.response && e.response.status === 401) {
@@ -172,11 +217,14 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     AsyncStorage.getItem('@battery_prompt_shown').then(status => {
       if (status === 'denied') setBatteryOptimizationDenied(true);
     });
-    
+
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (_event === 'SIGNED_OUT') {
+        stopAudioCapture();
+      }
       restoreJourney(session);
     });
-    
+
     return () => {
       authListener.subscription.unsubscribe();
     };
@@ -209,7 +257,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   };
 
-  const startSafeWindow = async (durationMinutes: SafeWindowDuration, checkInMinutes: number, startLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string}, destLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string}) => {
+  const startSafeWindow = async (durationMinutes: SafeWindowDuration, checkInMinutes: number, startLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }, destLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }) => {
     if (startInFlightRef.current || completeInFlightRef.current || safeWindow.status === 'ACTIVE') {
       throw new Error("Action currently in flight or another journey is already active.");
     }
@@ -219,7 +267,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     deviationAlertCreated.current = false;
     missedTriggeredRef.current = false;
     completeInFlightRef.current = false;
-    
+
     try {
       const now = new Date();
       const demoMode = durationMinutes === 0.5;
@@ -234,42 +282,42 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         } catch (e) { console.warn("Failed to get current location", e); }
       }
 
-      let initialRoute: {lat: number, lon: number}[] = [];
+      let initialRoute: { lat: number, lon: number }[] = [];
       if (actualStartLoc && actualStartLoc.latitude && actualStartLoc.longitude && destLoc && destLoc.latitude && destLoc.longitude) {
-        initialRoute = [{lat: actualStartLoc.latitude, lon: actualStartLoc.longitude}, {lat: destLoc.latitude, lon: destLoc.longitude}];
+        initialRoute = [{ lat: actualStartLoc.latitude, lon: actualStartLoc.longitude }, { lat: destLoc.latitude, lon: destLoc.longitude }];
         // Async route fetch
         getRoute(actualStartLoc, destLoc).then(fetchedRoute => {
           if (fetchedRoute) {
             setSafeWindow(prev => prev.status === 'ACTIVE' ? { ...prev, routePoints: fetchedRoute } : prev);
           }
-        }).catch(() => {});
+        }).catch(() => { });
       }
 
       let journeyData: any;
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) throw { response: { status: 401 } };
-        
+
         const payload = {
           journey_name: "Safe Journey",
           start_label: "Current Location",
           ...(actualStartLoc ? { start_latitude: actualStartLoc.latitude, start_longitude: actualStartLoc.longitude, start_address: actualStartLoc.address, start_place_id: (actualStartLoc as any).placeId, location_provider: (actualStartLoc as any).provider || (destLoc as any)?.provider } : {}),
           ...(destLoc ? { destination_label: "Destination", destination_latitude: destLoc.latitude, destination_longitude: destLoc.longitude, destination_address: destLoc.address, destination_place_id: (destLoc as any).placeId, location_provider: (destLoc as any).provider || (actualStartLoc as any)?.provider } : {}),
           ...(demoMode ? {
-             duration_seconds: 30,
-             duration_minutes: 1,
-             check_in_interval_seconds: 30,
-             check_in_interval_minutes: 1,
-             expected_duration_minutes: 1,
-             demo_mode: true
+            duration_seconds: 30,
+            duration_minutes: 1,
+            check_in_interval_seconds: 30,
+            check_in_interval_minutes: 1,
+            expected_duration_minutes: 1,
+            demo_mode: true
           } : {
-             duration_seconds: durationMinutes * 60,
-             duration_minutes: durationMinutes,
-             check_in_interval_minutes: checkInMinutes,
-             expected_duration_minutes: durationMinutes
+            duration_seconds: durationMinutes * 60,
+            duration_minutes: durationMinutes,
+            check_in_interval_minutes: checkInMinutes,
+            expected_duration_minutes: durationMinutes
           })
         };
-        
+
         console.log(`[DEBUG] POST /api/journeys executing for user: ${session.user?.id}`);
         const response = await apiClient.post('/api/journeys', payload);
         journeyData = response.data;
@@ -277,42 +325,42 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       } catch (e: any) {
         console.warn("Could not sync journey start to backend", e);
         let errorMessage = "Could not start Safe Window. Please try again.";
-        
+
         if (e.response) {
-           if (e.response.status === 401) errorMessage = "Session expired. Please login again.";
-           else if (e.response.status === 400 || e.response.status === 422) errorMessage = "Invalid journey duration. Please try again.";
-           else if (e.response.status === 409) {
-               errorMessage = e.response.data?.detail || e.response.data?.message || "You already have an active safe window. End it before starting another.";
-               try {
-                  const getResp = await apiClient.get('/api/journeys');
-                  const active = getResp.data.find((j: any) => j.status === 'active');
-                  if (active) {
-                      journeyData = active;
-                  } else {
-                      throw new Error(errorMessage);
-                  }
-               } catch (retryErr) {
-                  throw new Error(errorMessage);
-               }
-           }
+          if (e.response.status === 401) errorMessage = "Session expired. Please login again.";
+          else if (e.response.status === 400 || e.response.status === 422) errorMessage = "Invalid journey duration. Please try again.";
+          else if (e.response.status === 409) {
+            errorMessage = e.response.data?.detail || e.response.data?.message || "You already have an active safe window. End it before starting another.";
+            try {
+              const getResp = await apiClient.get('/api/journeys');
+              const active = getResp.data.find((j: any) => j.status === 'active');
+              if (active) {
+                journeyData = active;
+              } else {
+                throw new Error(errorMessage);
+              }
+            } catch (retryErr) {
+              throw new Error(errorMessage);
+            }
+          }
         } else if (e.message?.includes('Network Error') || e.message?.includes('timeout') || e.message?.includes('Network request failed')) {
-           errorMessage = "Could not reach backend. Check Wi-Fi/backend.";
-           try {
-               // In case it was a timeout but succeeded on backend
-               const getResp = await apiClient.get('/api/journeys');
-               const active = getResp.data.find((j: any) => j.status === 'active');
-               if (active) {
-                   journeyData = active;
-               } else {
-                   throw new Error(errorMessage);
-               }
-           } catch (retryErr) {
-               throw new Error(errorMessage);
-           }
+          errorMessage = "Could not reach backend. Check Wi-Fi/backend.";
+          try {
+            // In case it was a timeout but succeeded on backend
+            const getResp = await apiClient.get('/api/journeys');
+            const active = getResp.data.find((j: any) => j.status === 'active');
+            if (active) {
+              journeyData = active;
+            } else {
+              throw new Error(errorMessage);
+            }
+          } catch (retryErr) {
+            throw new Error(errorMessage);
+          }
         } else {
-           throw new Error(errorMessage);
+          throw new Error(errorMessage);
         }
-        
+
         if (!journeyData) throw new Error(errorMessage);
       }
 
@@ -338,6 +386,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       });
 
       startBackgroundLocationService();
+      startAudioCapture(); // Request microphone natively independently
       await scheduleNextNotification(journeyData.check_in_due_at, demoMode);
     } finally {
       startInFlightRef.current = false;
@@ -348,9 +397,9 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const endSafeWindow = async (forceId?: string) => {
     if (completeInFlightRef.current) return;
     completeInFlightRef.current = true;
-    
+
     clearExistingNotification();
-    
+
     const targetId = forceId || safeWindow.journeyId;
     if (targetId) {
       try {
@@ -364,23 +413,25 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
     setSafeWindow(initialState);
     stopBackgroundLocationService();
+    stopAudioCapture(); // User deliberately ends journey
     completeInFlightRef.current = false;
   };
 
   const markCheckInSafe = async () => {
     if (checkInInFlightRef.current || safeWindow.status !== 'ACTIVE') return;
     checkInInFlightRef.current = true;
-    
+
     try {
       if (safeWindow.journeyId) {
         const res = await apiClient.post(`/api/journeys/${safeWindow.journeyId}/check-in`);
         const journey = res.data;
         if (journey.status === 'completed' || journey.status === 'missed') {
-            setSafeWindow(prev => ({ ...prev, status: journey.status === 'completed' ? 'COMPLETED' : 'MISSED_CHECKIN' }));
-            if (journey.status === 'completed') {
-              stopBackgroundLocationService();
-            }
-            return;
+          setSafeWindow(prev => ({ ...prev, status: journey.status === 'completed' ? 'COMPLETED' : 'MISSED_CHECKIN' }));
+          if (journey.status === 'completed') {
+            stopBackgroundLocationService();
+            stopAudioCapture(); // User safely completes journey
+          }
+          return;
         }
         setSafeWindow(prev => {
           if (prev.status !== 'ACTIVE') return prev;
@@ -396,8 +447,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     } catch (e: any) {
       console.warn("Could not check in", e);
       if (e.response && (e.response.status === 404 || e.response.status === 409)) {
-          setSafeWindow(prev => ({ ...prev, status: 'COMPLETED' }));
-          stopBackgroundLocationService();
+        setSafeWindow(prev => ({ ...prev, status: 'COMPLETED' }));
+        stopBackgroundLocationService();
       }
     } finally {
       checkInInFlightRef.current = false;
@@ -407,9 +458,9 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const markMissedCheckIn = async (forceId?: string) => {
     if (missedTriggeredRef.current) return;
     missedTriggeredRef.current = true;
-    
+
     clearExistingNotification();
-    
+
     const targetId = forceId || safeWindow.journeyId;
     if (targetId) {
       try {
@@ -421,12 +472,12 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         console.warn("Could not sync missed checkin to backend", e);
       }
     }
-    
+
     setSafeWindow(prev => {
       const isJourney = prev.startLocation && prev.destinationLocation;
       const triggerType = isJourney ? 'JOURNEY_MISSED_CHECKIN' : 'DEAD_MAN_MISSED';
       const primary = getPrimaryContact();
-      
+
       getCurrentLocationForAlert().then(locationData => {
         createAlert({
           triggerType,
@@ -449,13 +500,13 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           guardian_email: primary?.email
         } as any);
       });
-      
+
       // Do NOT stop background location service for missed check-in
       // Journey continues
-      
+
       const intervalMins = prev.durationMinutes ? 5 : 5; // Default 5 if unknown
       const nextDue = new Date(new Date().getTime() + intervalMins * 60000).toISOString();
-      
+
       // Allow next checkin to trigger again if they miss it again
       setTimeout(() => { missedTriggeredRef.current = false; }, 10000);
 
@@ -500,11 +551,11 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   useEffect(() => {
     let timerInterval: NodeJS.Timeout;
     let locationInterval: NodeJS.Timeout;
-    
+
     const checkTimers = () => {
       if (safeWindow.status !== 'ACTIVE') return;
       const now = new Date().getTime();
-      
+
       // Missed check-in
       if (safeWindow.checkInDueAt && now >= new Date(safeWindow.checkInDueAt).getTime()) {
         markMissedCheckIn();
@@ -516,16 +567,16 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const checkLocation = () => {
       if (safeWindow.status !== 'ACTIVE') return;
       const now = new Date().getTime();
-      
+
       getCurrentLocationForAlert().then(async loc => {
         if (!loc || loc.permissionDenied) return;
         const currentLoc = { lat: loc.latitude, lon: loc.longitude };
-        
+
         // 1. Sync backend tracking (every 20s OR > 25m movement)
         if (safeWindow.journeyId && !isSyncingLocationRef.current) {
           const timeSinceSync = now - lastBackendSyncRef.current;
           let shouldSync = false;
-          
+
           if (timeSinceSync >= 20000 || unsentLocRef.current) {
             shouldSync = true;
           } else if (lastSyncedLocRef.current) {
@@ -569,10 +620,10 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
 
         // 2. Distance check (independent of route points)
-        if (safeWindow.destinationLocation && !safeWindow.demoMode && 
-            typeof safeWindow.destinationLocation.latitude === 'number' && 
-            typeof safeWindow.destinationLocation.longitude === 'number' &&
-            typeof currentLoc.lat === 'number' && typeof currentLoc.lon === 'number') {
+        if (safeWindow.destinationLocation && !safeWindow.demoMode &&
+          typeof safeWindow.destinationLocation.latitude === 'number' &&
+          typeof safeWindow.destinationLocation.longitude === 'number' &&
+          typeof currentLoc.lat === 'number' && typeof currentLoc.lon === 'number') {
           const destLoc = { lat: safeWindow.destinationLocation.latitude, lon: safeWindow.destinationLocation.longitude };
           const distToDest = distanceBetweenPointsMeters(currentLoc.lat, currentLoc.lon, destLoc.lat, destLoc.lon);
           setDistanceToDestination(distToDest);
@@ -590,7 +641,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 scheduleNextNotification(promptTime, prev.demoMode || false);
                 return { ...prev, routeDeviationWarningAt: new Date().toISOString(), checkInDueAt: promptTime };
               }
-              
+
               const warningTime = new Date(prev.routeDeviationWarningAt).getTime();
               if (now - warningTime >= 60000) {
                 return { ...prev, routeDeviationDetected: true };
@@ -606,21 +657,21 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             });
           }
         } else {
-           setDistanceToDestination(null);
+          setDistanceToDestination(null);
         }
       }).catch(err => {
-         if (__DEV__) console.log("SafeWindow location check failed", err);
+        if (__DEV__) console.log("SafeWindow location check failed", err);
       });
     };
-    
+
     if (safeWindow.status === 'ACTIVE') {
       timerInterval = setInterval(checkTimers, 1000);
       locationInterval = setInterval(checkLocation, 5000);
     }
-    
+
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (nextAppState === 'active' && safeWindow.status === 'ACTIVE') {
-         checkTimers();
+        checkTimers();
       }
     });
 
