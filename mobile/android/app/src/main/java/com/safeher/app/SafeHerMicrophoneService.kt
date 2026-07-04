@@ -12,6 +12,9 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.TimeUnit
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -34,20 +37,33 @@ class SafeHerMicrophoneService : Service() {
     private var sequenceNumber = 0
     private var activeGeneration: Int = -1
 
-    // POC 3A Detector State
     private val calibrationBuffer = DoubleArray(5)
     private var noiseFloor = 0.001
     private var currentClassification = "CALIBRATING"
     private var activeCount = 0
     private var quietCount = 0
     private var sustainedLoudCount = 0
+    private var loudDecayCount = 0
+
+    // POC 3B VAD State
+    private var vadEngine: VadEngine? = null
+    private var vadWorkerThread: Thread? = null
+    private var vadQueue: ArrayBlockingQueue<ShortArray>? = null
+    private val vadEngineRequiresReset = AtomicBoolean(false)
+
+    @Volatile private var currentSpeechProb = 0.0
+    @Volatile private var isSpeechDetected = false
+
+    // POC 3B Speech Persistence State
+    private var speechEnterCount = 0
+    private var speechExitCount = 0
 
     enum class ServiceState {
         IDLE, START_REQUESTED, RUNNING, STOP_REQUESTED
     }
 
     data class ServiceStateTracker(val state: ServiceState, val generation: Int)
-    
+
     companion object {
         val stateLock = Any()
         var tracker = ServiceStateTracker(ServiceState.IDLE, 0)
@@ -70,7 +86,15 @@ class SafeHerMicrophoneService : Service() {
         const val ACTIVE_PERSIST = 3
         const val QUIET_PERSIST = 5
         const val SUSTAINED_LOUD_PERSIST = 2
-        
+        const val LOUD_DECAY_CHUNKS = 3
+
+        // POC 3B Constants
+        const val VAD_FRAME_SIZE = 512
+        const val SPEECH_ENTER_THRESHOLD = 0.60
+        const val SPEECH_EXIT_THRESHOLD = 0.30
+        const val SPEECH_ENTER_FRAMES = 2
+        const val SPEECH_EXIT_FRAMES = 10
+
         // This holds a static reference to the React Context purely to emit events.
         // It should be set by the Module when it starts.
         @Volatile var reactContext: ReactApplicationContext? = null
@@ -113,7 +137,7 @@ class SafeHerMicrophoneService : Service() {
                 }
             }
         }
-        
+
         if (!shouldPromote) {
             Log.w("SafeHerMicService", "Stale START request: gen $intentGen ignored.")
             return
@@ -145,7 +169,7 @@ class SafeHerMicrophoneService : Service() {
 
         Log.i("SafeHerMicService", "FOREGROUND_READY")
         emitState("FOREGROUND_READY")
-        
+
         startAudioCapture(startId)
     }
 
@@ -180,16 +204,39 @@ class SafeHerMicrophoneService : Service() {
             audioRecord?.startRecording()
             Log.i("SafeHerMicService", "RECORDING_STARTED")
             emitState("RECORDING_STARTED")
-            
+
             isCapturing = true
             sequenceNumber = 0
-            
+
             // POC 3A Reset
             noiseFloor = MIN_NOISE_FLOOR
             currentClassification = "CALIBRATING"
             activeCount = 0
             quietCount = 0
             sustainedLoudCount = 0
+            loudDecayCount = 0
+
+            // POC 3B Init
+            try {
+                if (vadEngine == null) vadEngine = VadEngine(this)
+                // startup reset inherently safely called during generic VadEngine init
+
+                vadQueue = ArrayBlockingQueue(10)
+                vadEngineRequiresReset.set(false)
+
+                currentSpeechProb = 0.0
+                isSpeechDetected = false
+                speechEnterCount = 0
+                speechExitCount = 0
+
+                vadWorkerThread = Thread {
+                    vadWorkerLoop()
+                }.apply { start() }
+
+                Log.i("SafeHerMicService", "VAD Worker Initialized")
+            } catch (e: Exception) {
+                Log.e("SafeHerMicService", "VAD Worker Initialization Failed", e)
+            }
 
             recordingThread = Thread {
                 readAudioData()
@@ -230,7 +277,7 @@ class SafeHerMicrophoneService : Service() {
 
         Log.i("SafeHerMicService", "STOP_REQUESTED for gen $activeGeneration")
         isCapturing = false
-        
+
         try {
             audioRecord?.stop() // This safely unblocks a pending read()
         } catch (e: Exception) {
@@ -251,12 +298,12 @@ class SafeHerMicrophoneService : Service() {
 
         cleanupHardware()
         Log.i("SafeHerMicService", "RECORDING_STOPPED")
-        
+
         emitState("RECORDING_STOPPED")
-        
+
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         Log.i("SafeHerMicService", "FOREGROUND_STOPPED")
-        
+
         stopSelf(startId)
     }
 
@@ -266,13 +313,33 @@ class SafeHerMicrophoneService : Service() {
             val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
             val audioBuffer = ShortArray(minBufferSize)
             val chunkBuffer = ShortArray(CHUNK_SIZE)
+            val vadBuffer = ShortArray(VAD_FRAME_SIZE)
             var chunkIndex = 0
+            var vadIndex = 0
 
             while (isCapturing) {
                 val readSize = record.read(audioBuffer, 0, audioBuffer.size)
                 if (readSize > 0) {
                     for (i in 0 until readSize) {
-                        chunkBuffer[chunkIndex++] = audioBuffer[i]
+                        val sample = audioBuffer[i]
+                        chunkBuffer[chunkIndex++] = sample
+                        vadBuffer[vadIndex++] = sample
+
+                        // Enqueue 512-sample frame sequentially protecting Array mutation across boundaries
+                        if (vadIndex >= VAD_FRAME_SIZE) {
+                            val clone = vadBuffer.clone() // Deep copy isolation
+                            val queue = vadQueue
+                            if (queue != null) {
+                                if (!queue.offer(clone)) {
+                                    // Overflow Policy: Drop oldest continuously yielding continuity penalty natively
+                                    queue.poll()
+                                    queue.offer(clone)
+                                    vadEngineRequiresReset.set(true)
+                                }
+                            }
+                            vadIndex = 0
+                        }
+
                         if (chunkIndex >= CHUNK_SIZE) {
                             processChunk(chunkBuffer)
                             chunkIndex = 0
@@ -280,9 +347,9 @@ class SafeHerMicrophoneService : Service() {
                     }
                 } else if (readSize < 0) {
                     Log.e("SafeHerMicService", "AUDIORECORD_READ_ERROR: $readSize")
-                    break
-                }
-            }
+                     break
+                 }
+             }
         } finally {
             // No cleanup here. We perform deterministic cleanup in handleStopRequest and onDestroy exactly once.
         }
@@ -308,30 +375,49 @@ class SafeHerMicrophoneService : Service() {
             currentClassification = "CALIBRATING"
             if (sequenceNumber == CALIBRATION_CHUNKS) {
                 val sorted = calibrationBuffer.sorted()
-                val medianRms = sorted[2] // index 2 is median of 5 elements
-                noiseFloor = maxOf(MIN_NOISE_FLOOR, minOf(MAX_NOISE_FLOOR, medianRms))
+                val lowerTwoMean = (sorted[0] + sorted[1]) / 2.0
+                noiseFloor = maxOf(MIN_NOISE_FLOOR, minOf(MAX_NOISE_FLOOR, lowerTwoMean))
+
+                val isActiveCandidate = (normalizedRms >= noiseFloor * ACTIVE_RMS_MULTI)
+                if (isActiveCandidate) {
+                    currentClassification = "ACTIVE_SOUND"
+                } else {
+                    currentClassification = "QUIET"
+                }
             }
         } else {
             val targetFloor = maxOf(MIN_NOISE_FLOOR, minOf(MAX_NOISE_FLOOR, normalizedRms))
-            
+
             if (targetFloor <= noiseFloor) {
                 noiseFloor = (noiseFloor * (1 - ALPHA_DOWN)) + (targetFloor * ALPHA_DOWN)
             } else if (normalizedRms < noiseFloor * NOISE_UPDATE_MULTI) {
                 noiseFloor = (noiseFloor * (1 - ALPHA_UP)) + (targetFloor * ALPHA_UP)
             }
-            
+
             val isImpulsiveLoud = (normalizedPeak >= LOUD_PEAK_ABS)
             val isSustainedLoudCandidate = (normalizedRms >= LOUD_RMS_ABS)
             val isActiveCandidate = (normalizedRms >= noiseFloor * ACTIVE_RMS_MULTI)
 
+            if (isImpulsiveLoud || isSustainedLoudCandidate) {
+                loudDecayCount = 0
+            } else {
+                loudDecayCount++
+            }
+
             if (isSustainedLoudCandidate) sustainedLoudCount++ else sustainedLoudCount = 0
             if (isActiveCandidate) activeCount++ else activeCount = 0
             if (!isActiveCandidate && !isSustainedLoudCandidate && !isImpulsiveLoud) quietCount++ else quietCount = 0
-            
+
             var nextClass = currentClassification
             if (isImpulsiveLoud || sustainedLoudCount >= SUSTAINED_LOUD_PERSIST) {
                 nextClass = "LOUD_EVENT"
                 quietCount = 0
+            } else if (currentClassification == "LOUD_EVENT" && loudDecayCount >= LOUD_DECAY_CHUNKS) {
+                if (isActiveCandidate) {
+                    nextClass = "ACTIVE_SOUND"
+                } else {
+                    nextClass = "QUIET"
+                }
             } else if (activeCount >= ACTIVE_PERSIST) {
                 nextClass = "ACTIVE_SOUND"
             } else if (quietCount >= QUIET_PERSIST) {
@@ -345,28 +431,53 @@ class SafeHerMicrophoneService : Service() {
         val formattedRms = String.format("%.4f", normalizedRms)
         val formattedPeak = String.format("%.4f", normalizedPeak)
         val formattedFloor = String.format("%.4f", noiseFloor)
-        
-        Log.i("SafeHerAudioPOC", "chunk=$sequenceNumber pPeak=$formattedPeak pRms=$formattedRms floor=$formattedFloor calib=($calibrationProgress/$CALIBRATION_CHUNKS) quietCount=$quietCount activeCount=$activeCount susLoudCount=$sustainedLoudCount class=$currentClassification")
+        val formattedProb = String.format("%.4f", currentSpeechProb)
+
+        Log.i("SafeHerAudioPOC", "chunk=$sequenceNumber pPeak=$formattedPeak pRms=$formattedRms floor=$formattedFloor class=$currentClassification speechProb=$formattedProb speech=$isSpeechDetected loudDecay=$loudDecayCount speechEnter=$speechEnterCount speechExit=$speechExitCount")
 
         val params = Arguments.createMap()
         params.putInt("sequenceNumber", sequenceNumber)
         params.putInt("sampleCount", chunk.size)
+        // Keep peakAmplitude and rms just for legacy compatibility with React Native components
         params.putInt("peakAmplitude", peak)
         params.putDouble("rms", normalizedRms)
         params.putDouble("timestamp", System.currentTimeMillis().toDouble())
+
+        // Add new POC 3A metadata
         params.putDouble("noiseFloor", noiseFloor)
         params.putString("classification", currentClassification)
         params.putInt("calibrationProgress", calibrationProgress)
+
+        // Add POC 3B VAD metadata
+        params.putDouble("speechProbability", currentSpeechProb)
+        params.putBoolean("speechDetected", isSpeechDetected)
 
         reactContext?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
             ?.emit("onAudioMetrics", params)
     }
 
     private fun cleanupHardware() {
-        audioRecord?.release()
-        audioRecord = null
+        val record = audioRecord
+        if (record != null) {
+            record.release()
+            Log.i("SafeHerMicService", "AUDIORECORD_RELEASED")
+            audioRecord = null
+        }
         recordingThread = null
-        Log.i("SafeHerMicService", "AUDIORECORD_RELEASED")
+
+        try {
+            vadWorkerThread?.interrupt()
+            vadWorkerThread?.join(500)
+            vadWorkerThread = null
+            vadQueue?.clear()
+            vadQueue = null
+            vadEngineRequiresReset.set(false)
+
+            vadEngine?.close()
+            vadEngine = null
+        } catch (e: Exception) {
+            Log.e("SafeHerMicService", "VAD Cleanup Error", e)
+        }
     }
 
     override fun onDestroy() {
@@ -376,7 +487,7 @@ class SafeHerMicrophoneService : Service() {
         cleanupHardware()
         Log.i("SafeHerMicService", "SERVICE_DESTROYED for activeGen $activeGeneration")
         reactContext = null
-        
+
         synchronized(stateLock) {
             val currentTracker = tracker
             if (activeGeneration != -1 && currentTracker.generation == activeGeneration) {
@@ -421,6 +532,51 @@ class SafeHerMicrophoneService : Service() {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+    }
+
+    private fun vadWorkerLoop() {
+        while (isCapturing) {
+            try {
+                val queue = vadQueue ?: break
+                val frame = queue.poll(100, TimeUnit.MILLISECONDS)
+                if (frame != null) {
+                    if (vadEngineRequiresReset.getAndSet(false)) {
+                        vadEngine?.resetState()
+                    }
+                    val prob = vadEngine?.processChunkFast(frame) ?: 0.0
+                    currentSpeechProb = prob
+
+                    if (!isSpeechDetected) {
+                        if (currentSpeechProb >= SPEECH_ENTER_THRESHOLD) {
+                            speechEnterCount++
+                        } else {
+                            speechEnterCount = 0
+                        }
+                        if (speechEnterCount >= SPEECH_ENTER_FRAMES) {
+                            isSpeechDetected = true
+                            speechEnterCount = 0
+                            speechExitCount = 0
+                        }
+                    } else {
+                        if (currentSpeechProb <= SPEECH_EXIT_THRESHOLD) {
+                            speechExitCount++
+                        } else {
+                            speechExitCount = 0
+                        }
+                        if (speechExitCount >= SPEECH_EXIT_FRAMES) {
+                            isSpeechDetected = false
+                            speechEnterCount = 0
+                            speechExitCount = 0
+                        }
+                    }
+                }
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            } catch (e: Exception) {
+                Log.e("SafeHerMicService", "VAD Worker Exception", e)
+            }
+        }
     }
 
     private fun emitState(state: String) {
