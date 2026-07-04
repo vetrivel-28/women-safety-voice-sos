@@ -28,6 +28,7 @@ if (!isExpoGo) {
 }
 
 export default function FamilyLiveMapScreen() {
+  console.log('[FAMILY MAP BUILD MARKER] family-map-debug-v3');
   const { family } = useFamily();
   const [locations, setLocations] = useState<FamilyMemberLocation[]>([]);
   const [sharingEnabled, setSharingEnabled] = useState(false);
@@ -80,6 +81,7 @@ export default function FamilyLiveMapScreen() {
     try {
       setErrorMsg(null);
       const data = await familyLocationsApi.getLocations(family.id);
+      console.log('[FAMILY API RAW RESPONSE]', JSON.stringify(data));
       setLocations(data);
       setErrorMsg(null);
     } catch (e: any) {
@@ -158,7 +160,7 @@ export default function FamilyLiveMapScreen() {
     if (!item.sharing_enabled) {
       statusText = 'SHARING OFF';
       statusColor = '#94A3B8';
-    } else if (!item.has_location || !hasValidCoords) {
+    } else if (!item.has_location) {
       statusText = 'NO LOCATION YET';
       statusColor = '#94A3B8';
     } else if (item.is_stale || item.status === 'OFFLINE') {
@@ -170,6 +172,8 @@ export default function FamilyLiveMapScreen() {
       statusColor = getStatusColor(item.status, item.is_stale);
       timeText = item.updated_at ? `Updated: ${formatTime(item.updated_at)}` : '';
     }
+
+    console.log(`[FAMILY UI DISPLAY DECISION] userId=${item.user_id} statusText=${statusText}`);
 
     return (
       <View style={styles.listItem}>
@@ -223,12 +227,7 @@ export default function FamilyLiveMapScreen() {
         <>
           <View style={styles.mapContainer}>
             {MapLibreGL ? (() => {
-              const plottableLocs = locations.filter(l => 
-                l.has_location === true && 
-                l.sharing_enabled === true && 
-                typeof l.latitude === 'number' && 
-                typeof l.longitude === 'number'
-              );
+              const plottableLocs = locations.filter(l => l.has_location && l.sharing_enabled && l.latitude != null && l.longitude != null);
               console.log('[FAMILY UI MARKERS]', plottableLocs.length);
               return (
               <View style={StyleSheet.absoluteFillObject}>
