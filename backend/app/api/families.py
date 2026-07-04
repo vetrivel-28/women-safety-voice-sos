@@ -48,10 +48,22 @@ def ensure_profile_exists(current_user, service_client):
             metadata = getattr(current_user, "user_metadata", {}) or {}
             full_name = metadata.get("full_name", "")
             
+            new_code = ""
+            for _ in range(10):
+                candidate = str(random.randint(0, 999999)).zfill(6)
+                collision = service_client.table("profiles").select("id").eq("guardian_code", candidate).neq("id", current_user.id).execute()
+                if not collision.data:
+                    new_code = candidate
+                    break
+            
+            if not new_code:
+                raise Exception("Failed to generate unique guardian_code")
+            
             service_client.table("profiles").upsert({
                 "id": current_user.id,
                 "email": email,
-                "full_name": full_name
+                "full_name": full_name,
+                "guardian_code": new_code
             }).execute()
             profile_created = True
 

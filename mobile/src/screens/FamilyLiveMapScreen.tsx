@@ -261,11 +261,15 @@ export default function FamilyLiveMapScreen() {
                 </View>
               </View>
               );
-            })() : (
-              <View style={styles.mapFallback}>
-                <Text style={styles.fallbackText}>Map preview needs development build. Showing live location list.</Text>
-              </View>
-            )}
+            })() : (() => {
+              const fallbackReason = isExpoGo ? 'expo-go' : (!MapLibreGL ? 'maplibre-load-failed' : 'unknown');
+              console.log('[MAP RUNTIME] fallbackReason =', fallbackReason);
+              return (
+                <View style={styles.mapFallback}>
+                  <Text style={styles.fallbackText}>Map preview needs development build. Showing live location list.</Text>
+                </View>
+              );
+            })()}
           </View>
 
           <View style={styles.listContainer}>
