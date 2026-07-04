@@ -7,8 +7,18 @@ export function useRingSOS() {
   const { createAlert } = useAlert();
 
   useEffect(() => {
+    console.log('[Ring] Starting BLE connection flow');
+
+    // Start scanning for the SafeHer Ring
+    ringService.connect();
+
+    // Subscribe to messages received from the ring
     const unsubscribe = ringService.subscribe((event) => {
+      console.log('[Ring] Event received:', event);
+
       if (event === 'SOS') {
+        console.log('[Ring] Hardware SOS received');
+
         createAlert({
           triggerType: 'HARDWARE_SOS',
           status: 'ACTIVE',
@@ -16,11 +26,11 @@ export function useRingSOS() {
           cancelMethod: 'REAL_PIN',
         })
           .then(() => {
-            // Send ACK to ring after SOS alert is created successfully
-            ringService.sendAcknowledge();
+            console.log('[Ring] SOS created successfully, sending ACK');
+            return ringService.sendAcknowledge();
           })
           .catch((err) => {
-            console.error('Failed to create alert from ring:', err);
+            console.error('[Ring] Failed to create alert from ring:', err);
 
             Alert.alert(
               'SOS Failed',
@@ -31,6 +41,7 @@ export function useRingSOS() {
     });
 
     return () => {
+      console.log('[Ring] Cleaning up SOS subscription');
       unsubscribe();
     };
   }, [createAlert]);
