@@ -12,6 +12,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
+import java.util.ArrayDeque
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeUnit
@@ -58,6 +59,30 @@ class SafeHerMicrophoneService : Service() {
     private var speechEnterCount = 0
     private var speechExitCount = 0
 
+    // POC 4A Speech Segment Collector State
+    private val speechPreRollFrames = ArrayDeque<ShortArray>()
+    private val activeSpeechSegmentFrames = ArrayList<ShortArray>()
+    private var isCollectingSpeechSegment = false
+    private var speechSegmentStartTimeMs = 0L
+
+    private var isSpeechEndPending = false
+    private var speechEndHangoverFrameCount = 0
+
+    private val speechEndHangoverFrameLimit =
+        (
+            (SPEECH_END_HANGOVER_MS * SAMPLE_RATE) +
+                (1000 * VAD_FRAME_SIZE) - 1
+        ) / (1000 * VAD_FRAME_SIZE)
+
+    private val speechPreRollFrameLimit =
+        (SPEECH_PRE_ROLL_MS * SAMPLE_RATE) / (1000 * VAD_FRAME_SIZE)
+
+    private val speechMinSegmentSamples =
+        (SPEECH_MIN_SEGMENT_MS * SAMPLE_RATE) / 1000
+
+    private val speechMaxSegmentSamples =
+        (SPEECH_MAX_SEGMENT_MS * SAMPLE_RATE) / 1000
+
     enum class ServiceState {
         IDLE, START_REQUESTED, RUNNING, STOP_REQUESTED
     }
@@ -94,6 +119,12 @@ class SafeHerMicrophoneService : Service() {
         const val SPEECH_EXIT_THRESHOLD = 0.30
         const val SPEECH_ENTER_FRAMES = 2
         const val SPEECH_EXIT_FRAMES = 10
+
+        // POC 4A Speech Segment Collector Constants
+        const val SPEECH_PRE_ROLL_MS = 500
+        const val SPEECH_MIN_SEGMENT_MS = 250
+        const val SPEECH_MAX_SEGMENT_MS = 15_000
+        const val SPEECH_END_HANGOVER_MS = 700
 
         // This holds a static reference to the React Context purely to emit events.
         // It should be set by the Module when it starts.
@@ -471,6 +502,7 @@ class SafeHerMicrophoneService : Service() {
             vadWorkerThread = null
             vadQueue?.clear()
             vadQueue = null
+            resetSpeechSegmentCollector("SERVICE_CLEANUP")
             vadEngineRequiresReset.set(false)
 
             vadEngine?.close()
@@ -542,9 +574,15 @@ class SafeHerMicrophoneService : Service() {
                 if (frame != null) {
                     if (vadEngineRequiresReset.getAndSet(false)) {
                         vadEngine?.resetState()
+                        resetSpeechSegmentCollector("VAD_CONTINUITY_RESET")
                     }
                     val prob = vadEngine?.processChunkFast(frame) ?: 0.0
                     currentSpeechProb = prob
+
+                    updateSpeechPreRoll(frame)
+
+                    var segmentStartedThisFrame = false
+                    var segmentEndPendingStartedThisFrame = false
 
                     if (!isSpeechDetected) {
                         if (currentSpeechProb >= SPEECH_ENTER_THRESHOLD) {
@@ -556,6 +594,13 @@ class SafeHerMicrophoneService : Service() {
                             isSpeechDetected = true
                             speechEnterCount = 0
                             speechExitCount = 0
+
+                            if (isCollectingSpeechSegment && isSpeechEndPending) {
+                                cancelSpeechEndHangover()
+                            } else {
+                                startSpeechSegment()
+                                segmentStartedThisFrame = true
+                            }
                         }
                     } else {
                         if (currentSpeechProb <= SPEECH_EXIT_THRESHOLD) {
@@ -567,7 +612,24 @@ class SafeHerMicrophoneService : Service() {
                             isSpeechDetected = false
                             speechEnterCount = 0
                             speechExitCount = 0
+
+                            if (isCollectingSpeechSegment) {
+                                beginSpeechEndHangover()
+                                segmentEndPendingStartedThisFrame = true
+                            }
                         }
+                    }
+
+                    if (isCollectingSpeechSegment && !segmentStartedThisFrame) {
+                        appendActiveSpeechFrameIfWithinLimit(frame)
+                    }
+
+                    if (
+                        isCollectingSpeechSegment &&
+                        isSpeechEndPending &&
+                        !segmentEndPendingStartedThisFrame
+                    ) {
+                        advanceSpeechEndHangover()
                     }
                 }
             } catch (e: InterruptedException) {
@@ -577,6 +639,135 @@ class SafeHerMicrophoneService : Service() {
                 Log.e("SafeHerMicService", "VAD Worker Exception", e)
             }
         }
+    }
+
+    private fun updateSpeechPreRoll(frame: ShortArray) {
+        speechPreRollFrames.addLast(frame.clone())
+        while (speechPreRollFrames.size > speechPreRollFrameLimit) {
+            speechPreRollFrames.removeFirst()
+        }
+    }
+
+    private fun activeSpeechSegmentSampleCount(): Int {
+        return activeSpeechSegmentFrames.sumOf { it.size }
+    }
+
+    private fun appendActiveSpeechFrameIfWithinLimit(frame: ShortArray) {
+        val currentSamples = activeSpeechSegmentSampleCount()
+
+        if (currentSamples + frame.size > speechMaxSegmentSamples) {
+            isCollectingSpeechSegment = false
+
+            Log.i(
+                "SafeHerSpeechSegment",
+                "SPEECH_SEGMENT_MAX_REACHED samples=$currentSamples"
+            )
+            return
+        }
+
+        activeSpeechSegmentFrames.add(frame.clone())
+    }
+
+    private fun beginSpeechEndHangover() {
+        isSpeechEndPending = true
+        speechEndHangoverFrameCount = 0
+
+        Log.i(
+            "SafeHerSpeechSegment",
+            "SPEECH_SEGMENT_END_PENDING hangoverFrames=$speechEndHangoverFrameLimit"
+        )
+    }
+
+    private fun cancelSpeechEndHangover() {
+        isSpeechEndPending = false
+        speechEndHangoverFrameCount = 0
+
+        Log.i(
+            "SafeHerSpeechSegment",
+            "SPEECH_SEGMENT_END_CANCELLED"
+        )
+    }
+
+    private fun advanceSpeechEndHangover() {
+        if (!isSpeechEndPending || !isCollectingSpeechSegment) {
+            return
+        }
+
+        speechEndHangoverFrameCount++
+
+        if (speechEndHangoverFrameCount >= speechEndHangoverFrameLimit) {
+            isSpeechEndPending = false
+            speechEndHangoverFrameCount = 0
+            finalizeSpeechSegment()
+        }
+    }
+
+    private fun finalizeSpeechSegment() {
+        isSpeechEndPending = false
+        speechEndHangoverFrameCount = 0
+        val sampleCount = activeSpeechSegmentSampleCount()
+        val durationMs = (sampleCount.toLong() * 1000L) / SAMPLE_RATE
+
+        isCollectingSpeechSegment = false
+
+        if (sampleCount < speechMinSegmentSamples) {
+            Log.i(
+                "SafeHerSpeechSegment",
+                "SPEECH_SEGMENT_DROPPED_TOO_SHORT samples=$sampleCount durationMs=$durationMs"
+            )
+            activeSpeechSegmentFrames.clear()
+            speechSegmentStartTimeMs = 0L
+            return
+        }
+
+        Log.i(
+            "SafeHerSpeechSegment",
+            "SPEECH_SEGMENT_FINALIZED samples=$sampleCount durationMs=$durationMs frames=${activeSpeechSegmentFrames.size}"
+        )
+
+        speechSegmentStartTimeMs = 0L
+    }
+
+    private fun resetSpeechSegmentCollector(reason: String) {
+        val hadState =
+            speechPreRollFrames.isNotEmpty() ||
+            activeSpeechSegmentFrames.isNotEmpty() ||
+            isCollectingSpeechSegment ||
+            speechSegmentStartTimeMs != 0L ||
+            isSpeechEndPending ||
+            speechEndHangoverFrameCount != 0
+
+        speechPreRollFrames.clear()
+        activeSpeechSegmentFrames.clear()
+        isCollectingSpeechSegment = false
+        speechSegmentStartTimeMs = 0L
+        isSpeechEndPending = false
+        speechEndHangoverFrameCount = 0
+
+        if (hadState) {
+            Log.i(
+                "SafeHerSpeechSegment",
+                "SPEECH_SEGMENT_COLLECTOR_RESET reason=$reason"
+            )
+        }
+    }
+
+    private fun startSpeechSegment() {
+        isSpeechEndPending = false
+        speechEndHangoverFrameCount = 0
+        activeSpeechSegmentFrames.clear()
+
+        for (preRollFrame in speechPreRollFrames) {
+            activeSpeechSegmentFrames.add(preRollFrame.clone())
+        }
+
+        isCollectingSpeechSegment = true
+        speechSegmentStartTimeMs = System.currentTimeMillis()
+
+        Log.i(
+            "SafeHerSpeechSegment",
+            "SPEECH_SEGMENT_STARTED preRollFrames=${activeSpeechSegmentFrames.size}"
+        )
     }
 
     private fun emitState(state: String) {
