@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: safeher-backend
+    env: docker
+    region: oregon
+    plan: free
+    rootDir: backend
+    branch: main
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

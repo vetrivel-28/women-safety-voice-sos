@@ -31,6 +31,41 @@ class SharingToggle(BaseModel):
     sharing_enabled: bool
 
 
+class NearbyResponder(BaseModel):
+    user_id: str
+    name: str
+    role: str
+    distance_km: float
+    last_updated: str
+    status: str
+
+
+class NearbyRespondersResponse(BaseModel):
+    family_id: str
+    origin_available: bool
+    responders: list[NearbyResponder]
+
+
+def _haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    Calculate distance between two points in meters using the Haversine formula.
+    Consistent with mobile distanceBetweenPointsMeters logic.
+    """
+    import math
+    R = 6371000  # Earth's radius in meters
+    
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    delta_lat = math.radians(lat2 - lat1)
+    delta_lon = math.radians(lon2 - lon1)
+    
+    a = (math.sin(delta_lat / 2) ** 2 +
+         math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    
+    return R * c
+
+
 def _resolve_member_status(service_client, user_id: str) -> str:
     """Compute a member's current safety status from live data."""
     try:
@@ -132,6 +167,7 @@ def get_family_locations(family_id: str, auth_data: dict = Depends(get_current_u
                 
             result.append(resp_obj)
 
+        print(f"[LOCATIONS RESPONSE DEBUG] familyId={family_id} count={len(result)}", flush=True)
         return result
     except HTTPException:
         raise
@@ -253,3 +289,129 @@ def update_location_sharing(toggle: SharingToggle, auth_data: dict = Depends(get
     except Exception as e:
         logger.error(f"Error updating location sharing: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not update sharing preference")
+
+
+@router.get("/{family_id}/nearby-responders", response_model=NearbyRespondersResponse)
+def get_nearby_responders(family_id: str, auth_data: dict = Depends(get_current_user)):
+    """
+    Returns nearby family members who can respond to emergencies.
+    Origin: current authenticated user's last known location.
+    Privacy: no coordinates returned, excludes self and members without sharing enabled.
+    """
+    user = auth_data["user"]
+    service_client = get_service_role_client()
+
+    try:
+        # Reuse the exact membership/security check from /api/family/{family_id}/locations
+        members_res = (
+            service_client.table("family_members")
+            .select("id, user_id, role, status, profiles:user_id(id, full_name, email)")
+            .eq("family_id", family_id)
+            .eq("status", "active")
+            .execute()
+        )
+        
+        # Verify caller is in the active members list
+        is_member = any(m["user_id"] == user.id for m in members_res.data or [])
+        if not is_member:
+            raise HTTPException(status_code=403, detail="Not an active member of this family")
+
+        members = members_res.data or []
+
+        # Get current user's last known location as origin
+        locs_res = (
+            service_client.table("family_member_locations")
+            .select("*")
+            .eq("family_id", family_id)
+            .eq("user_id", user.id)
+            .execute()
+        )
+
+        origin_available = False
+        origin_lat = None
+        origin_lon = None
+
+        if locs_res.data and locs_res.data[0].get("sharing_enabled"):
+            loc_data = locs_res.data[0]
+            origin_lat = loc_data.get("latitude")
+            origin_lon = loc_data.get("longitude")
+            if origin_lat is not None and origin_lon is not None:
+                origin_available = True
+
+        if not origin_available:
+            return NearbyRespondersResponse(
+                family_id=family_id,
+                origin_available=False,
+                responders=[]
+            )
+
+        # Fetch all locations for this family
+        all_locs_res = (
+            service_client.table("family_member_locations")
+            .select("*")
+            .eq("family_id", family_id)
+            .execute()
+        )
+        
+        loc_map = {loc["user_id"]: loc for loc in all_locs_res.data or []}
+
+        responders = []
+        
+        for m in members:
+            # Skip self
+            if m["user_id"] == user.id:
+                continue
+            
+            loc = loc_map.get(m["user_id"])
+            
+            # Must have location, sharing enabled, and valid coordinates
+            if not loc:
+                continue
+            if not loc.get("sharing_enabled"):
+                continue
+            if loc.get("latitude") is None or loc.get("longitude") is None:
+                continue
+            
+            try:
+                lat = float(loc["latitude"])
+                lon = float(loc["longitude"])
+            except (ValueError, TypeError):
+                continue
+            
+            # Calculate distance
+            distance_meters = _haversine_distance_meters(origin_lat, origin_lon, lat, lon)
+            distance_km = round(distance_meters / 1000.0, 2)
+            
+            # Get member status
+            status = _resolve_member_status(service_client, m["user_id"])
+            
+            # Get name from profile
+            profile = m.get("profiles", {})
+            name = profile.get("full_name") or profile.get("email") or m["user_id"]
+            
+            responders.append({
+                "user_id": m["user_id"],
+                "name": name,
+                "role": m["role"],
+                "distance_km": distance_km,
+                "last_updated": loc.get("updated_at"),
+                "status": status,
+            })
+        
+        # Sort by distance (nearest first)
+        responders.sort(key=lambda r: r["distance_km"])
+        
+        return NearbyRespondersResponse(
+            family_id=family_id,
+            origin_available=True,
+            responders=responders
+        )
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching nearby responders: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

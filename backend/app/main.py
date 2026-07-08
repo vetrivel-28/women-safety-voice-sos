@@ -1,17 +1,24 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import auth, alerts, guardians, sos, profile, contacts, journeys, places, notifications, families
+from app.api import trusted_places, family_locations, safety
 from app.core.config import settings
 from app.db.client import get_supabase_client
 from contextlib import asynccontextmanager
 import sys
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
+
+from app.services.escalation_worker import sos_escalation_loop
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("--- Starting FastAPI Application ---")
+    
+    # Start SOS escalation worker
+    escalation_task = asyncio.create_task(sos_escalation_loop())
     logger.info(f"Python Version: {sys.version}")
     logger.info(f"Loaded SUPABASE_URL: {settings.SUPABASE_URL}")
     
@@ -23,6 +30,11 @@ async def lifespan(app: FastAPI):
         
     yield
     logger.info("--- Shutting Down FastAPI Application ---")
+    escalation_task.cancel()
+    try:
+        await escalation_task
+    except asyncio.CancelledError:
+        pass
 
 app = FastAPI(
     title="SafeHer API",
@@ -81,6 +93,9 @@ app.include_router(journeys.router)
 app.include_router(places.router)
 app.include_router(notifications.router)
 app.include_router(families.router)
+app.include_router(trusted_places.router)
+app.include_router(family_locations.router)
+app.include_router(safety.router)
 
 @app.get("/")
 async def root():

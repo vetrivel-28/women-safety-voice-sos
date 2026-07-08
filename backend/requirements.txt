@@ -4,3 +4,4 @@ supabase
 python-dotenv
 pydantic
 pydantic-settings
+email-validator

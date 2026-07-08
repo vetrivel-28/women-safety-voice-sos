@@ -12,13 +12,16 @@ const getBaseUrl = () => {
     return process.env.EXPO_PUBLIC_API_BASE_URL;
   }
 
-  const hostUri = Constants.expoConfig?.hostUri;
-  if (hostUri) {
-    const lanIp = hostUri.split(':')[0];
-    return `http://${lanIp}:8000`;
+  if (__DEV__) {
+    const hostUri = Constants.expoConfig?.hostUri;
+    if (hostUri) {
+      const lanIp = hostUri.split(':')[0];
+      return `http://${lanIp}:8000`;
+    }
+    return 'http://127.0.0.1:8000';
   }
-  
-  return 'http://127.0.0.1:8000';
+
+  throw new Error("Missing EXPO_PUBLIC_API_BASE_URL in release configuration");
 };
 
 const rawUrl = getBaseUrl();
@@ -42,6 +45,19 @@ const sanitizeForLog = (headers: any) => {
     sanitized.Authorization = 'Bearer <redacted>';
   }
   return sanitized;
+};
+
+// Helper to sanitize payload to prevent location leaks
+const sanitizePayloadForLog = (url: string | undefined, payload: any) => {
+  if (!payload) return payload;
+  if (url && url.includes('/api/family/me/location')) {
+    const sanitized = { ...payload };
+    if (sanitized.latitude !== undefined) sanitized.latitude = '<redacted>';
+    if (sanitized.longitude !== undefined) sanitized.longitude = '<redacted>';
+    if (sanitized.accuracy !== undefined) sanitized.accuracy = '<redacted>';
+    return sanitized;
+  }
+  return payload;
 };
 
 // Prevent duplicate log spam for recurring network errors
@@ -68,7 +84,7 @@ apiClient.interceptors.request.use(
       baseURL: config.baseURL,
       headers: sanitizeForLog(config.headers),
       jwtPresent: hasJwt,
-      payload: config.data,
+      payload: sanitizePayloadForLog(config.url, config.data),
       time: new Date().toISOString()
     });
 

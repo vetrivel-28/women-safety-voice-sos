@@ -154,6 +154,11 @@ class NotificationService:
 
             for guardian_id in guardian_ids:
                 try:
+                    # Deduplicate: check if notification already exists for this alert and guardian
+                    existing = service_client.table("in_app_notifications").select("id").eq("user_id", guardian_id).eq("alert_id", alert_id).eq("type", f"ward_{alert_type.lower()}").execute()
+                    if existing.data:
+                        continue
+                        
                     service_client.table("in_app_notifications").insert({
                         "user_id": guardian_id,
                         "actor_user_id": user_id,
@@ -276,21 +281,22 @@ class NotificationService:
         alert_type = alert_payload.get("trigger_type", "SOS")
         location = alert_payload.get("location", None)
         
-        for contact in contacts:
+        for i, contact in enumerate(contacts):
             try:
-                res = self.notify_guardian(contact, alert_type, user, location, alert_id=alert_id)
-                if isinstance(res, dict) and not res.get("sms_sent", True):
-                    result["failed_count"] += 1
-                elif res == "SENT":
-                    result["sent_count"] += 1
-                else:
-                    result["failed_count"] += 1
+                # Add to escalation targets instead of sending immediately
+                service_client.table("sos_escalation_targets").insert({
+                    "sos_alert_id": alert_id,
+                    "contact_type": "sms_contact",
+                    "target_ref": contact.get("phone") or contact.get("email") or contact.get("id"),
+                    "priority_order": i + 1
+                }).execute()
             except Exception as e:
-                result["failed_count"] += 1
+                logger.error(f"Failed to insert escalation target for contact: {e}")
                 result["errors"].append(str(e))
                 
-        if result["sent_count"] > 0:
-            result["sms_status"] = "sent" if result["failed_count"] == 0 else "partial"
+        # Send SMS to priority 1 immediately here (or let the background job handle it right away)
+        # We will let the background worker handle it so it's all in one place and durable.
+        result["sms_status"] = "queued_for_escalation"
             
         return result
 

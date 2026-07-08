@@ -277,3 +277,33 @@ def log_alert_view(alert_id: str, auth_data: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Failed to log alert view: {e}")
         return {"success": False}
+
+@router.post("/{alert_id}/ack")
+def acknowledge_sos_alert(alert_id: str, contact: str):
+    """
+    Endpoint for a contact to acknowledge an SOS alert via SMS link.
+    """
+    service_client = get_service_role_client()
+    try:
+        from datetime import datetime, timezone
+        # Mark target as acknowledged
+        res = service_client.table("sos_escalation_targets")\
+            .update({"acknowledged_at": datetime.now(timezone.utc).isoformat()})\
+            .eq("sos_alert_id", alert_id)\
+            .eq("target_ref", contact)\
+            .execute()
+            
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Target not found for this alert")
+            
+        # Transition alert to acknowledged if it was active
+        alert = service_client.table("sos_alerts").select("status").eq("id", alert_id).execute()
+        if alert.data and alert.data[0]["status"] == "active":
+            service_client.table("sos_alerts").update({"status": "acknowledged"}).eq("id", alert_id).execute()
+            
+        return {"message": "SOS acknowledged successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error acknowledging SOS: {e}")
+        raise HTTPException(status_code=500, detail="Could not acknowledge alert")
