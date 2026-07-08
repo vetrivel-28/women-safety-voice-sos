@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+console.log('[NAV] AppNavigator loaded');
 import { Text } from 'react-native';
 import * as Linking from 'expo-linking';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';

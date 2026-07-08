@@ -13,9 +13,9 @@ export type RootStackParamList = {
   GuardianAlertDetails: { alertId?: string; journeyId?: string };
   GuardianPersonDetail: { protectedUserId: string; name?: string; status?: string };
   Notifications: undefined;
-  FamilyDashboard: undefined;
-  FamilyLiveMap: undefined;
-  FamilyMembers: undefined;
+  FamilyDashboard: { familyId?: string } | undefined;
+  FamilyLiveMap: { familyId?: string } | undefined;
+  FamilyMembers: { familyId?: string; requestId?: string } | undefined;
   FamilySettings: undefined;
   JoinFamily: undefined;
   CreateFamily: undefined;
@@ -73,6 +73,8 @@ export type SafeWindowStatus = 'INACTIVE' | 'ACTIVE' | 'COMPLETED' | 'MISSED_CHE
 
 export type SafeWindowDuration = 15 | 30 | 60 | 0.5;
 
+export type SafeWindowSeverity = 'NORMAL' | 'HIGH' | 'CRITICAL' | 'RESOLVED';
+
 export interface SafeWindowState {
   journeyId?: string;
   status: SafeWindowStatus;
@@ -84,7 +86,7 @@ export interface SafeWindowState {
   demoMode: boolean;
   missedCheckInAt?: string | null;
   startLocation?: { latitude: number; longitude: number } | null;
-  destinationLocation?: { latitude: number; longitude: number } | null;
+  destinationLocation?: { latitude: number; longitude: number; address?: string } | null;
   routePoints?: {lat: number, lon: number}[];
   routeDeviationWarningAt?: string | null;
   routeDeviationDetected?: boolean;
@@ -92,4 +94,83 @@ export interface SafeWindowState {
   estimated_duration_minutes?: number | null;
   estimated_arrival_at?: string | null;
   route_status?: string | null;
+  // Trusted Place fields
+  trustedPlaceId?: string | null;
+  destinationName?: string | null;
+  destinationRadiusMeters?: number | null;
+  notifyGuardiansOnArrival?: boolean;
+  // Escalation fields
+  severity?: SafeWindowSeverity;
+  escalatedAt?: string | null;
+  escalatedReason?: string | null;
+  // Auto-complete tracking (mobile-only, not persisted)
+  reachedTrustedPlace?: boolean;
+}
+
+// ── Trusted Places ──────────────────────────────────────────────────────────
+
+export type TrustedPlaceLabel =
+  | 'Home'
+  | 'Office'
+  | 'College'
+  | 'Hostel'
+  | "Friend's House"
+  | 'Other';
+
+export const TRUSTED_PLACE_LABELS: TrustedPlaceLabel[] = [
+  'Home', 'Office', 'College', 'Hostel', "Friend's House", 'Other',
+];
+
+export const TRUSTED_PLACE_LABEL_ICONS: Record<TrustedPlaceLabel, string> = {
+  Home: '🏠',
+  Office: '🏢',
+  College: '🎓',
+  Hostel: '🏨',
+  "Friend's House": '👫',
+  Other: '📍',
+};
+
+export interface TrustedPlace {
+  id: string;
+  user_id: string;
+  name: string;
+  label: TrustedPlaceLabel | null;
+  latitude: number;
+  longitude: number;
+  address: string | null;
+  radius_meters: number;
+  notify_guardians_on_arrival: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// ── Family Location ──────────────────────────────────────────────────────────
+
+export type FamilyMemberLocationStatus =
+  | 'SAFE'
+  | 'IN_SAFE_WINDOW'
+  | 'SOS_ACTIVE'
+  | 'CHECKIN_MISSED'
+  | 'OFFLINE';
+
+export interface FamilyMemberLocation {
+  id: string;
+  family_id: string;
+  user_id: string;
+  role?: string;
+  has_location?: boolean;
+  latitude: number | null;
+  longitude: number | null;
+  accuracy: number | null;
+  status: FamilyMemberLocationStatus;
+  source: string | null;
+  sharing_enabled: boolean;
+  updated_at: string | null;
+  is_stale?: boolean;
+  profiles?: {
+    id: string;
+    full_name: string | null;
+    email: string | null;
+  };
 }

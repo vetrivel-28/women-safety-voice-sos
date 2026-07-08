@@ -192,9 +192,49 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     fetchInFlightRef.current = false;
   };
 
-  // Initial load + realtime subscriptions
+  // Track current authenticated user to detect account switches
+  const currentUserIdRef = useRef<string | null>(null);
+
+  // Initial load + realtime subscriptions + auth-change reset
   useEffect(() => {
-    fetchDashboard();
+    // ── Auth-change handler: reset all family state on user switch ──────────
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      const newUserId = session?.user?.id ?? null;
+      const oldUserId = currentUserIdRef.current;
+
+      console.log('[AUTH USER CHANGE] oldUserId =', oldUserId);
+      console.log('[AUTH USER CHANGE] newUserId =', newUserId);
+
+      if (newUserId !== oldUserId) {
+        currentUserIdRef.current = newUserId;
+
+        // Stop in-flight requests from the old user reaching our state
+        if (channelRef.current) {
+          supabase.removeChannel(channelRef.current);
+          channelRef.current = null;
+        }
+
+        // Unconditionally clear all family state before fetching for new user
+        console.log('[FAMILY STATE RESET] reason = auth_user_change');
+        clearState();
+
+        if (newUserId) {
+          // Small delay so the Supabase client token is propagated before we fetch
+          setTimeout(() => {
+            console.log('[FAMILY CURRENT FETCH] userId =', newUserId);
+            fetchDashboard();
+          }, 300);
+        }
+      }
+    });
+
+    // Seed current user on mount
+    supabase.auth.getSession().then(({ data }) => {
+      const userId = data?.session?.user?.id ?? null;
+      currentUserIdRef.current = userId;
+      console.log('[FAMILY CURRENT FETCH] userId =', userId);
+      fetchDashboard();
+    });
 
     const setupRealtime = () => {
       if (channelRef.current) {
@@ -213,6 +253,7 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setupRealtime();
 
     return () => {
+      authSub.subscription.unsubscribe();
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
         channelRef.current = null;

@@ -198,25 +198,7 @@ export default function FamilyDashboardScreen() {
           </TouchableOpacity>
         </View>
 
-        {isHost && joinRequests.length > 0 && (
-          <View style={styles.requestsContainer}>
-            <SectionHeader title="Pending Join Requests" />
-            {joinRequests.map((req: any) => (
-              <View key={req.id} style={styles.requestCard}>
-                <Text style={styles.reqName}>{req.profiles?.full_name || req.profiles?.email}</Text>
-                <Text style={styles.reqTime}>wants to join</Text>
-                <View style={styles.requestActions}>
-                  <TouchableOpacity style={styles.approveBtn} onPress={() => approveJoin(req.id)}>
-                    <Text style={{color: 'white', fontWeight: '500'}}>Approve</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.rejectBtn} onPress={() => rejectJoin(req.id)}>
-                    <Text style={{color: '#64748B', fontWeight: '500'}}>Reject</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
+
       </ScrollView>
     </SafeAreaView>
   );

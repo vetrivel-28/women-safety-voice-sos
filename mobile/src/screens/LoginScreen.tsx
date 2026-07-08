@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityInd
 import { supabase } from '../lib/supabaseClient';
 import * as Linking from 'expo-linking';
 import { PrimaryButton } from '../components/PrimaryButton';
+import { API_BASE_URL } from '../api/client';
 
 export default function LoginScreen() {
   const [isLogin, setIsLogin] = useState(true);
@@ -44,30 +45,43 @@ export default function LoginScreen() {
     }
 
     setLoading(true);
-    const redirectUrl = Linking.createURL('');
     
-    const {
-      data: { session },
-      error,
-    } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: redirectUrl,
-        data: {
+    try {
+      // Generate idempotency key
+      const signupRequestId = `${email}_${Date.now()}`;
+      
+      const response = await fetch(`${API_BASE_URL}/api/auth/signup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          email,
+          password,
           full_name: fullName,
           mobile_number: mobileNumber,
-        }
+          signup_request_id: signupRequestId
+        })
+      });
+      
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to sign up');
       }
-    });
-
-    if (error) {
+      
+      const data = await response.json();
+      if (data.message === 'User already exists. Please login.') {
+        Alert.alert('Info', data.message);
+        setIsLogin(true);
+      } else {
+        Alert.alert('Success', 'Account created successfully! Please sign in.');
+        setIsLogin(true);
+      }
+    } catch (error: any) {
       Alert.alert('Sign up failed', error.message);
-    } else if (!session) {
-      Alert.alert('Success', 'Please check your inbox for email verification!');
-      setIsLogin(true);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   return (

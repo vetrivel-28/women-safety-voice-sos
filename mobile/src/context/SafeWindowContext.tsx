@@ -1,6 +1,7 @@
 import React, { createContext, useState, useContext, useEffect, useRef } from 'react';
-import { SafeWindowState, SafeWindowDuration } from '../types';
+import { SafeWindowState, SafeWindowDuration, TrustedPlace } from '../types';
 import { useAlert } from './AlertContext';
+import { useNotifications } from './NotificationContext';
 import { getCurrentLocationForAlert } from '../utils/location';
 import { distanceBetweenPointsMeters, isRouteDeviation } from '../utils/geoUtils';
 import { useContacts } from './ContactsContext';
@@ -16,11 +17,12 @@ import { apiClient } from '../api/client';
 interface SafeWindowContextType {
   safeWindow: SafeWindowState;
   startSafeWindow: (
-    durationMinutes: SafeWindowDuration, 
+    durationMinutes: SafeWindowDuration,
     checkInMinutes: number,
     startLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string},
-    destLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string}
-  ) => void;
+    destLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string},
+    trustedPlace?: TrustedPlace | null,
+  ) => Promise<void>;
   endSafeWindow: () => void;
   markCheckInSafe: () => void;
   markMissedCheckIn: () => void;
@@ -33,6 +35,8 @@ interface SafeWindowContextType {
   openBatterySettings: () => void;
   checkAndPromptBatteryExemption: () => Promise<void>;
   isStartingJourney: boolean;
+  showArrivalModal: boolean;
+  closeArrivalModal: () => void;
 }
 
 const SafeWindowContext = createContext<SafeWindowContextType | undefined>(undefined);
@@ -57,6 +61,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [safeWindow, setSafeWindow] = useState<SafeWindowState>(initialState);
   const [distanceToDestination, setDistanceToDestination] = useState<number | null>(null);
   const { createAlert } = useAlert();
+  const { fetchNotifications } = useNotifications();
   const { getPrimaryContact } = useContacts();
   const missedAlertCreated = useRef(false);
   const deviationAlertCreated = useRef(false);
@@ -67,13 +72,37 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const restoreInFlightRef = useRef(false);
   const [batteryOptimizationDenied, setBatteryOptimizationDenied] = useState(false);
   const [isStartingJourney, setIsStartingJourney] = useState(false);
+  const [showArrivalModal, setShowArrivalModal] = useState(false);
+  const [arrivalModalJourneyId, setArrivalModalJourneyId] = useState<string | null>(null);
   const activeNotificationId = useRef<string | null>(null);
+  const appStateRef = useRef(AppState.currentState);
+  
+  // Arrival POST ref guards to prevent duplicate calls
+  const arrivalPostInFlightJourneyIdRef = useRef<string | null>(null);
+  const arrivalHandledJourneyIdRef = useRef<string | null>(null);
+  const arrivalModalShownJourneyIdRef = useRef<string | null>(null);
   
   // Location Sync Refs
   const lastBackendSyncRef = useRef<number>(0);
   const lastSyncedLocRef = useRef<{lat: number, lon: number} | null>(null);
   const unsentLocRef = useRef<{lat: number, lon: number, accuracy?: number, captured_at?: string, provider?: string} | null>(null);
   const isSyncingLocationRef = useRef(false);
+
+  const syncFamilyLocation = async (
+    coords: { latitude: number; longitude: number; accuracy?: number },
+    source: string
+  ) => {
+    try {
+      await apiClient.put('/api/family/me/location', {
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        accuracy: coords.accuracy,
+        source,
+      });
+    } catch (e) {
+      // Non-fatal: user may not be in an approved family, or request failed.
+    }
+  };
 
   const clearExistingNotification = async () => {
     if (activeNotificationId.current) {
@@ -135,11 +164,20 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           estimated_duration_minutes: active.estimated_duration_minutes,
           estimated_arrival_at: active.estimated_arrival_at,
           route_status: active.route_status,
+          // Trusted place restore
+          trustedPlaceId: active.trusted_place_id || null,
+          destinationName: active.destination_name || null,
+          destinationRadiusMeters: active.destination_radius_meters || 100,
+          notifyGuardiansOnArrival: active.notify_guardians_on_arrival ?? true,
+          severity: active.severity || 'NORMAL',
+          escalatedAt: active.escalated_at || null,
+          escalatedReason: active.escalated_reason || null,
+          reachedTrustedPlace: false,
         }));
         
         missedTriggeredRef.current = false;
         completeInFlightRef.current = false;
-        startBackgroundLocationService();
+        // Background service is now managed by AppState listener
         
         // Immediately check if already missed while app was closed
         if (now.getTime() >= new Date(checkInDueStr).getTime()) {
@@ -176,11 +214,26 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
       restoreJourney(session);
     });
+
+    // Track app state changes to manage background service
+    const appStateSubscription = AppState.addEventListener('change', nextAppState => {
+      appStateRef.current = nextAppState;
+      
+      // Only start background service when app goes to background and safe window is active
+      if (nextAppState === 'background' && safeWindow.status === 'ACTIVE') {
+        startBackgroundLocationService('app_background');
+      }
+      // Stop background service when app comes to foreground (JS polling handles it)
+      else if (nextAppState === 'active') {
+        stopBackgroundLocationService('app_foreground');
+      }
+    });
     
     return () => {
       authListener.subscription.unsubscribe();
+      appStateSubscription.remove();
     };
-  }, []);
+  }, [safeWindow.status]);
 
   const openBatterySettings = async () => {
     await requestExemption();
@@ -209,7 +262,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   };
 
-  const startSafeWindow = async (durationMinutes: SafeWindowDuration, checkInMinutes: number, startLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string}, destLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string}) => {
+  const startSafeWindow = async (durationMinutes: SafeWindowDuration, checkInMinutes: number, startLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string}, destLoc?: {latitude: number, longitude: number, address?: string, placeId?: string, provider?: string}, trustedPlace?: TrustedPlace | null) => {
     if (startInFlightRef.current || completeInFlightRef.current || safeWindow.status === 'ACTIVE') {
       throw new Error("Action currently in flight or another journey is already active.");
     }
@@ -255,6 +308,16 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           start_label: "Current Location",
           ...(actualStartLoc ? { start_latitude: actualStartLoc.latitude, start_longitude: actualStartLoc.longitude, start_address: actualStartLoc.address, start_place_id: (actualStartLoc as any).placeId, location_provider: (actualStartLoc as any).provider || (destLoc as any)?.provider } : {}),
           ...(destLoc ? { destination_label: "Destination", destination_latitude: destLoc.latitude, destination_longitude: destLoc.longitude, destination_address: destLoc.address, destination_place_id: (destLoc as any).placeId, location_provider: (destLoc as any).provider || (actualStartLoc as any)?.provider } : {}),
+          // Trusted place integration
+          ...(trustedPlace ? {
+            trusted_place_id: trustedPlace.id,
+            destination_name: trustedPlace.name,
+            destination_latitude: trustedPlace.latitude,
+            destination_longitude: trustedPlace.longitude,
+            destination_address: trustedPlace.address || destLoc?.address,
+            destination_radius_meters: trustedPlace.radius_meters,
+            notify_guardians_on_arrival: trustedPlace.notify_guardians_on_arrival,
+          } : {}),
           ...(demoMode ? {
              duration_seconds: 30,
              duration_minutes: 1,
@@ -316,6 +379,12 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (!journeyData) throw new Error(errorMessage);
       }
 
+      // Reset arrival refs for new journey
+      console.log('[TRUSTED PLACE ARRIVAL] refs_reset_for_new_journey journeyId =', journeyData.id);
+      arrivalPostInFlightJourneyIdRef.current = null;
+      arrivalHandledJourneyIdRef.current = null;
+      arrivalModalShownJourneyIdRef.current = null;
+
       setSafeWindow({
         journeyId: journeyData.id,
         status: 'ACTIVE',
@@ -327,7 +396,9 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         demoMode,
         missedCheckInAt: null,
         startLocation: actualStartLoc || null,
-        destinationLocation: destLoc || null,
+        destinationLocation: trustedPlace
+          ? { latitude: trustedPlace.latitude, longitude: trustedPlace.longitude, address: trustedPlace.address || undefined }
+          : destLoc || null,
         routePoints: initialRoute,
         routeDeviationWarningAt: null,
         routeDeviationDetected: false,
@@ -335,10 +406,24 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         estimated_duration_minutes: journeyData.estimated_duration_minutes,
         estimated_arrival_at: journeyData.estimated_arrival_at,
         route_status: journeyData.route_status,
+        // Trusted place
+        trustedPlaceId: trustedPlace?.id || null,
+        destinationName: trustedPlace?.name || journeyData.destination_name || null,
+        destinationRadiusMeters: trustedPlace?.radius_meters || journeyData.destination_radius_meters || 100,
+        notifyGuardiansOnArrival: trustedPlace?.notify_guardians_on_arrival ?? true,
+        severity: 'NORMAL',
+        reachedTrustedPlace: false,
       });
 
-      startBackgroundLocationService();
+      // Background service is now managed by AppState listener
       await scheduleNextNotification(journeyData.check_in_due_at, demoMode);
+      
+      if (actualStartLoc && typeof actualStartLoc.latitude === 'number' && typeof actualStartLoc.longitude === 'number') {
+        await syncFamilyLocation({
+          latitude: actualStartLoc.latitude,
+          longitude: actualStartLoc.longitude,
+        }, 'SAFE_WINDOW');
+      }
     } finally {
       startInFlightRef.current = false;
       setIsStartingJourney(false);
@@ -356,14 +441,32 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (session) {
-          const res = await apiClient.post(`/api/journeys/${targetId}/complete`);
+          await apiClient.post(`/api/journeys/${targetId}/complete`);
+          
+          if (lastSyncedLocRef.current) {
+            await syncFamilyLocation({
+              latitude: lastSyncedLocRef.current.lat,
+              longitude: lastSyncedLocRef.current.lon,
+            }, 'SAFE_WINDOW_ENDED');
+          } else {
+            try {
+              const loc = await getCurrentLocationForAlert(true);
+              if (loc && !loc.permissionDenied) {
+                await syncFamilyLocation({
+                  latitude: loc.latitude,
+                  longitude: loc.longitude,
+                  accuracy: loc.accuracy || undefined,
+                }, 'SAFE_WINDOW_ENDED');
+              }
+            } catch (e) {}
+          }
         }
       } catch (e) {
         console.warn("Could not sync journey complete to backend", e);
       }
     }
     setSafeWindow(initialState);
-    stopBackgroundLocationService();
+    stopBackgroundLocationService('cleanup');
     completeInFlightRef.current = false;
   };
 
@@ -378,7 +481,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (journey.status === 'completed' || journey.status === 'missed') {
             setSafeWindow(prev => ({ ...prev, status: journey.status === 'completed' ? 'COMPLETED' : 'MISSED_CHECKIN' }));
             if (journey.status === 'completed') {
-              stopBackgroundLocationService();
+              stopBackgroundLocationService('cleanup');
             }
             return;
         }
@@ -397,7 +500,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       console.warn("Could not check in", e);
       if (e.response && (e.response.status === 404 || e.response.status === 409)) {
           setSafeWindow(prev => ({ ...prev, status: 'COMPLETED' }));
-          stopBackgroundLocationService();
+          stopBackgroundLocationService('cleanup');
       }
     } finally {
       checkInInFlightRef.current = false;
@@ -416,6 +519,24 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const { data: { session } } = await supabase.auth.getSession();
         if (session) {
           await apiClient.post(`/api/journeys/${targetId}/missed-checkin`);
+          
+          if (lastSyncedLocRef.current) {
+            await syncFamilyLocation({
+              latitude: lastSyncedLocRef.current.lat,
+              longitude: lastSyncedLocRef.current.lon,
+            }, 'SAFE_WINDOW_MISSED_CHECKIN');
+          } else {
+            try {
+              const loc = await getCurrentLocationForAlert(true);
+              if (loc && !loc.permissionDenied) {
+                await syncFamilyLocation({
+                  latitude: loc.latitude,
+                  longitude: loc.longitude,
+                  accuracy: loc.accuracy || undefined,
+                }, 'SAFE_WINDOW_MISSED_CHECKIN');
+              }
+            } catch (e) {}
+          }
         }
       } catch (e) {
         console.warn("Could not sync missed checkin to backend", e);
@@ -557,6 +678,12 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               lastBackendSyncRef.current = now;
               lastSyncedLocRef.current = currentLoc;
               unsentLocRef.current = null;
+              
+              await syncFamilyLocation({
+                latitude: payload.latitude,
+                longitude: payload.longitude,
+                accuracy: payload.accuracy,
+              }, 'SAFE_WINDOW');
             } catch (e) {
               console.warn("Could not sync location to backend (offline/network issue)", e);
               if (!unsentLocRef.current) {
@@ -568,7 +695,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           }
         }
 
-        // 2. Distance check (independent of route points)
+        // 2. Distance check + trusted-place auto-complete
         if (safeWindow.destinationLocation && !safeWindow.demoMode && 
             typeof safeWindow.destinationLocation.latitude === 'number' && 
             typeof safeWindow.destinationLocation.longitude === 'number' &&
@@ -576,6 +703,67 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           const destLoc = { lat: safeWindow.destinationLocation.latitude, lon: safeWindow.destinationLocation.longitude };
           const distToDest = distanceBetweenPointsMeters(currentLoc.lat, currentLoc.lon, destLoc.lat, destLoc.lon);
           setDistanceToDestination(distToDest);
+
+          // Trusted place auto-complete: enter radius → complete journey
+          const radius = safeWindow.destinationRadiusMeters || 100;
+          const accuracyOk = !loc.accuracy || loc.accuracy <= 100;
+          
+          console.log('[GEOFENCE REGISTERED] trustedPlaceId =', safeWindow.trustedPlaceId);
+          console.log('[GEOFENCE REGISTERED] destinationRadiusMeters =', radius);
+          console.log('[GEOFENCE REGISTERED] calculatedDistanceMeters =', distToDest);
+          
+          if (
+            safeWindow.trustedPlaceId &&
+            safeWindow.journeyId &&
+            distToDest <= radius &&
+            accuracyOk
+          ) {
+            const journeyId = safeWindow.journeyId;
+            console.log('[GEOFENCE ENTER] distance =', distToDest, 'radius =', radius);
+            console.log('[TRUSTED PLACE ARRIVAL] trustedPlaceId =', safeWindow.trustedPlaceId);
+            
+            // Ref-based duplicate prevention (synchronous, before await)
+            if (arrivalHandledJourneyIdRef.current === journeyId) {
+              console.log('[TRUSTED PLACE ARRIVAL] duplicate_skipped journeyId =', journeyId, 'reason = already_handled');
+              return;
+            }
+            if (arrivalPostInFlightJourneyIdRef.current === journeyId) {
+              console.log('[TRUSTED PLACE ARRIVAL] duplicate_skipped journeyId =', journeyId, 'reason = in_flight');
+              return;
+            }
+            
+            // Set in-flight ref synchronously before API call
+            arrivalPostInFlightJourneyIdRef.current = journeyId;
+            console.log('[TRUSTED PLACE ARRIVAL] post_started journeyId =', journeyId);
+            
+            // Mark locally to prevent UI flicker (non-critical guard)
+            setSafeWindow(prev => ({ ...prev, reachedTrustedPlace: true }));
+            setArrivalModalJourneyId(journeyId);
+            
+            try {
+              await apiClient.post(`/api/journeys/${journeyId}/reached-trusted-place`);
+              console.log('[TRUSTED PLACE ARRIVAL] post_success journeyId =', journeyId);
+              
+              // Mark as handled only on success
+              arrivalHandledJourneyIdRef.current = journeyId;
+              
+              // Refresh notifications to show new arrival notification
+              fetchNotifications();
+              
+              // Show arrival modal only once per journey
+              if (arrivalModalShownJourneyIdRef.current !== journeyId) {
+                console.log('[TRUSTED PLACE ARRIVAL MODAL] shown journeyId =', journeyId);
+                arrivalModalShownJourneyIdRef.current = journeyId;
+                setShowArrivalModal(true);
+              }
+            } catch (e) {
+              console.warn('[SafeWindow] reached-trusted-place API call failed (non-fatal)', e);
+              // Clear in-flight ref on failure to allow retry
+              arrivalPostInFlightJourneyIdRef.current = null;
+            }
+            // Don't clear state yet - wait for user to close modal
+            return;
+          }
         } else {
           setDistanceToDestination(null);
         }
@@ -649,6 +837,17 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return diff > 0 ? diff : 0;
   };
 
+  const closeArrivalModal = () => {
+    const journeyId = arrivalModalShownJourneyIdRef.current;
+    console.log('[TRUSTED PLACE ARRIVAL MODAL] closed journeyId =', journeyId);
+    setShowArrivalModal(false);
+    setArrivalModalJourneyId(null);
+    // Clear local state after user closes modal
+    clearExistingNotification();
+    setSafeWindow(initialState);
+    stopBackgroundLocationService('cleanup');
+  };
+
   return (
     <SafeWindowContext.Provider value={{
       safeWindow,
@@ -664,7 +863,9 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       batteryOptimizationDenied,
       openBatterySettings,
       checkAndPromptBatteryExemption,
-      isStartingJourney
+      isStartingJourney,
+      showArrivalModal,
+      closeArrivalModal
     }}>
       {children}
     </SafeWindowContext.Provider>

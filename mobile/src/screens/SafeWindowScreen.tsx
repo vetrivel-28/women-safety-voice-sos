@@ -1,15 +1,18 @@
 import { SafeAreaView } from 'react-native-safe-area-context';
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Platform, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, Platform, TextInput, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Alert, Modal } from 'react-native';
 import { useSafeWindow } from '../context/SafeWindowContext';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SectionHeader } from '../components/SectionHeader';
 import { getCurrentLocationForAlert } from '../utils/location';
-import { searchPlaces, geocodePlace, reverseGeocode, PlaceResult, isUsingNominatim } from '../services/geocodingService';
+import { searchPlaces, reverseGeocode, PlaceResult, isUsingNominatim } from '../services/geocodingService';
 import { formatDistance, distanceBetweenPointsMeters } from '../utils/geoUtils';
+import { trustedPlacesApi } from '../api/trustedPlaces';
+import { TrustedPlace, TRUSTED_PLACE_LABEL_ICONS, TrustedPlaceLabel } from '../types';
+import TrustedPlacesScreen from './TrustedPlacesScreen';
 
 export const SafeWindowScreen: React.FC = () => {
-  const { safeWindow, startSafeWindow, endSafeWindow, getRemainingSeconds, getCheckInRemainingSeconds, markCheckInSafe, distanceToDestination, resumeRoute, cancelDeviationWarning, batteryOptimizationDenied, openBatterySettings, isStartingJourney } = useSafeWindow();
+  const { safeWindow, startSafeWindow, endSafeWindow, getRemainingSeconds, getCheckInRemainingSeconds, markCheckInSafe, distanceToDestination, resumeRoute, cancelDeviationWarning, batteryOptimizationDenied, openBatterySettings, isStartingJourney, showArrivalModal, closeArrivalModal } = useSafeWindow();
   
   const [timeLeft, setTimeLeft] = useState(getRemainingSeconds());
   const [checkInTimeLeft, setCheckInTimeLeft] = useState(getCheckInRemainingSeconds());
@@ -32,6 +35,43 @@ export const SafeWindowScreen: React.FC = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const searchTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  // ── Trusted places state ──────────────────────────────────────────────────
+  const [trustedPlaces, setTrustedPlaces] = useState<TrustedPlace[]>([]);
+  const [selectedTrustedPlace, setSelectedTrustedPlace] = useState<TrustedPlace | null>(null);
+  const [showTrustedPlacesPicker, setShowTrustedPlacesPicker] = useState(false);
+
+  const loadTrustedPlaces = () => {
+    trustedPlacesApi.list()
+      .then(data => setTrustedPlaces(data))
+      .catch(() => {}); // non-fatal
+  };
+
+  useEffect(() => {
+    loadTrustedPlaces();
+  }, []);
+
+  const [isSavingTp, setIsSavingTp] = useState(false);
+  const handleQuickSaveTp = async () => {
+    if (!destPlace || !destPlace.latitude || !destPlace.longitude) return;
+    setIsSavingTp(true);
+    try {
+      await trustedPlacesApi.create({
+        name: destPlace.name,
+        latitude: destPlace.latitude,
+        longitude: destPlace.longitude,
+        address: destPlace.description || destPlace.name,
+        radius_meters: 100,
+        notify_guardians_on_arrival: true
+      });
+      loadTrustedPlaces();
+      Alert.alert('Success', 'Saved as a trusted place!');
+    } catch(e) {
+      Alert.alert('Error', 'Could not save trusted place.');
+    } finally {
+      setIsSavingTp(false);
+    }
+  };
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -160,12 +200,7 @@ export const SafeWindowScreen: React.FC = () => {
         Alert.alert('Location Warning', 'Location permission denied. Journey can start but exact start location is unavailable.');
       }
     } else if (startPlace) {
-      const coords = await geocodePlace(startPlace.id);
-      if (coords) {
-         startLoc = { ...coords, address: startPlace.name, placeId: startPlace.id, provider: startPlace.provider };
-      } else {
-         startLoc = { latitude: startPlace.latitude!, longitude: startPlace.longitude!, address: startPlace.name, placeId: startPlace.id, provider: startPlace.provider };
-      }
+      startLoc = { latitude: startPlace.latitude!, longitude: startPlace.longitude!, address: startPlace.name, placeId: startPlace.id, provider: startPlace.provider };
     } else {
       Alert.alert('Missing Location', 'Please select a starting location.');
       setIsStarting(false);
@@ -173,34 +208,47 @@ export const SafeWindowScreen: React.FC = () => {
     }
     
     if (destPlace) {
-      const coords = await geocodePlace(destPlace.id);
-      if (coords) {
-         destLoc = { ...coords, address: destPlace.name, placeId: destPlace.id, provider: destPlace.provider };
-      } else {
-         destLoc = { latitude: destPlace.latitude!, longitude: destPlace.longitude!, address: destPlace.name, placeId: destPlace.id, provider: destPlace.provider };
-      }
-      
-      // Far-destination guard (100km)
-      if (!forceStart && startLoc && startLoc.latitude && startLoc.longitude && destLoc.latitude && destLoc.longitude) {
-        const dist = distanceBetweenPointsMeters(startLoc.latitude, startLoc.longitude, destLoc.latitude, destLoc.longitude);
-        if (dist > 100000) {
-          setErrorBanner("Destination is too far away (> 100km).");
-          setIsStarting(false);
-          Alert.alert(
-            "Far Destination",
-            "Destination is over 100km away. Do you want to start anyway?",
-            [
-              { text: "Choose another destination", style: "cancel" },
-              { text: "Start anyway", onPress: () => handleStart(minutes, true) }
-            ]
-          );
-          return;
-        }
+      destLoc = { latitude: destPlace.latitude!, longitude: destPlace.longitude!, address: destPlace.name, placeId: destPlace.id, provider: destPlace.provider };
+    } else if (selectedTrustedPlace) {
+      // Construct destLoc from trusted place
+      destLoc = { 
+        latitude: selectedTrustedPlace.latitude, 
+        longitude: selectedTrustedPlace.longitude, 
+        address: selectedTrustedPlace.address || selectedTrustedPlace.name 
+      };
+    }
+    
+    // Far-destination guard (100km)
+    if (destLoc && !forceStart && startLoc && startLoc.latitude && startLoc.longitude && destLoc.latitude && destLoc.longitude) {
+      const dist = distanceBetweenPointsMeters(startLoc.latitude, startLoc.longitude, destLoc.latitude, destLoc.longitude);
+      if (dist > 100000) {
+        setErrorBanner("Destination is too far away (> 100km).");
+        setIsStarting(false);
+        Alert.alert(
+          "Far Destination",
+          "Destination is over 100km away. Do you want to start anyway?",
+          [
+            { text: "Choose another destination", style: "cancel" },
+            { text: "Start anyway", onPress: () => handleStart(minutes, true) }
+          ]
+        );
+        return;
       }
     }
     
     try {
-      await startSafeWindow(minutes, checkInMinutes, startLoc, destLoc);
+      console.log('[SAFE WINDOW START PAYLOAD CHECK]', {
+        start_label: startLoc?.address,
+        start_latitude: startLoc?.latitude,
+        start_longitude: startLoc?.longitude,
+        destination_label: destLoc?.address,
+        destination_latitude: destLoc?.latitude,
+        destination_longitude: destLoc?.longitude,
+        calculatedDistanceKm: startLoc && destLoc && startLoc.latitude && startLoc.longitude && destLoc.latitude && destLoc.longitude
+          ? Math.round(distanceBetweenPointsMeters(startLoc.latitude, startLoc.longitude, destLoc.latitude, destLoc.longitude) / 100) / 10
+          : null,
+      });
+      await startSafeWindow(minutes, checkInMinutes, startLoc, destLoc, selectedTrustedPlace);
     } catch (e: any) {
       setErrorBanner(e.message || 'Could not start journey. Please try again.');
     } finally {
@@ -260,6 +308,18 @@ export const SafeWindowScreen: React.FC = () => {
               {safeWindow.status === 'ACTIVE' ? (
                 <View style={styles.activeSection}>
                   
+                  {safeWindow.severity === 'CRITICAL' && (
+                    <View style={[styles.warningBox, { borderColor: '#DC2626', backgroundColor: '#FEF2F2', marginBottom: 8 }]}>
+                      <Text style={[styles.warningTitle, { color: '#DC2626' }]}>🚨 CRITICAL — No guardian response</Text>
+                      <Text style={styles.warningText}>Emergency contacts have been alerted. Please respond to a guardian or end the journey.</Text>
+                    </View>
+                  )}
+                  {safeWindow.severity === 'HIGH' && !safeWindow.missedCheckInAt && (
+                    <View style={[styles.warningBox, { borderColor: '#F59E0B', backgroundColor: '#FFFBEB', marginBottom: 8 }]}>
+                      <Text style={[styles.warningTitle, { color: '#B45309' }]}>⚠️ HIGH severity — Guardians notified</Text>
+                      <Text style={styles.warningText}>Guardians are aware. Check in below when safe.</Text>
+                    </View>
+                  )}
                   {safeWindow.missedCheckInAt && (
                     <View style={[styles.warningBox, {borderColor: '#DC2626', backgroundColor: '#FEF2F2'}]}>
                       <Text style={[styles.warningTitle, {color: '#DC2626'}]}>⚠️ Check-in missed</Text>
@@ -439,45 +499,109 @@ export const SafeWindowScreen: React.FC = () => {
                     )}
                   </View>
                   <View style={styles.inputGroup}>
-                    <Text style={styles.inputLabel}>To (Optional)</Text>
-                    {!destPlace ? (
-                      <View>
-                        <TextInput 
-                          style={styles.searchInput} 
-                          placeholder="Search destination..." 
-                          placeholderTextColor="#94A3B8" 
-                          value={toQuery} 
-                          onChangeText={(t) => handleSearch(t, 'to')}
-                          onFocus={() => {
-                            if (toQuery === '') {
-                              handleSearch('', 'to');
-                            } else {
-                              setSearchTarget('to');
-                            }
-                          }}
-                        />
-                        {isSearching && searchTarget === 'to' && <ActivityIndicator style={{marginTop: 8}} color="#4F46E5" />}
-                        {searchResults.length > 0 && searchTarget === 'to' && (
-                          <View style={styles.resultsContainer}>
-                            {searchResults.map(result => (
-                              <TouchableOpacity key={result.id} style={styles.resultItem} onPress={() => handleSelectPlace(result)}>
-                                <Text style={styles.resultName}>{result.name}</Text>
-                                <Text style={styles.resultDesc}>{result.description}</Text>
+                    {/* ── Trusted Places quick-pick ───────────────────────── */}
+                    {trustedPlaces.length > 0 && !selectedTrustedPlace && (
+                      <View style={{ marginBottom: 12 }}>
+                        <Text style={styles.inputLabel}>Trusted Places</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }}>
+                          {trustedPlaces.slice(0, 5).map(tp => (
+                            <TouchableOpacity
+                              key={tp.id}
+                              style={tpStyles.chip}
+                              onPress={() => {
+                                setSelectedTrustedPlace(tp);
+                                setDestPlace(null);
+                                setToQuery('');
+                              }}
+                            >
+                              <Text style={tpStyles.chipIcon}>
+                                {tp.label ? TRUSTED_PLACE_LABEL_ICONS[tp.label as TrustedPlaceLabel] : '📍'}
+                              </Text>
+                              <Text style={tpStyles.chipName} numberOfLines={1}>{tp.name}</Text>
+                            </TouchableOpacity>
+                          ))}
+                          <TouchableOpacity
+                            style={[tpStyles.chip, { backgroundColor: '#F1F5F9' }]}
+                            onPress={() => setShowTrustedPlacesPicker(true)}
+                          >
+                            <Text style={tpStyles.chipName}>+ More</Text>
+                          </TouchableOpacity>
+                        </ScrollView>
+                      </View>
+                    )}
+
+                    {/* ── Selected trusted place ──────────────────────────── */}
+                    {selectedTrustedPlace && (
+                      <View style={{ marginBottom: 12 }}>
+                        <Text style={styles.inputLabel}>Destination (Trusted Place)</Text>
+                        <View style={tpStyles.selectedCard}>
+                          <Text style={tpStyles.selectedIcon}>
+                            {selectedTrustedPlace.label
+                              ? TRUSTED_PLACE_LABEL_ICONS[selectedTrustedPlace.label as TrustedPlaceLabel]
+                              : '📍'}
+                          </Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={tpStyles.selectedName}>{selectedTrustedPlace.name}</Text>
+                            <Text style={tpStyles.selectedRadius}>Arrival radius: {selectedTrustedPlace.radius_meters}m</Text>
+                          </View>
+                          <TouchableOpacity
+                            onPress={() => setSelectedTrustedPlace(null)}
+                            style={tpStyles.clearTp}
+                          >
+                            <Text style={{ color: '#4F46E5', fontWeight: '700', fontSize: 12 }}>Clear</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    )}
+
+                    {/* ── Manual destination search (hidden when trusted place selected) */}
+                    {!selectedTrustedPlace && (
+                      <>
+                        <Text style={styles.inputLabel}>To (Optional)</Text>
+                        {!destPlace ? (
+                          <View>
+                            <TextInput
+                              style={styles.searchInput}
+                              placeholder="Search destination..."
+                              placeholderTextColor="#94A3B8"
+                              value={toQuery}
+                              onChangeText={(t) => handleSearch(t, 'to')}
+                              onFocus={() => {
+                                if (toQuery === '') handleSearch('', 'to');
+                                else setSearchTarget('to');
+                              }}
+                            />
+                            {isSearching && searchTarget === 'to' && <ActivityIndicator style={{ marginTop: 8 }} color="#4F46E5" />}
+                            {searchResults.length > 0 && searchTarget === 'to' && (
+                              <View style={styles.resultsContainer}>
+                                {searchResults.map(result => (
+                                  <TouchableOpacity key={result.id} style={styles.resultItem} onPress={() => handleSelectPlace(result)}>
+                                    <Text style={styles.resultName}>{result.name}</Text>
+                                    <Text style={styles.resultDesc}>{result.description}</Text>
+                                  </TouchableOpacity>
+                                ))}
+                              </View>
+                            )}
+                          </View>
+                        ) : (
+                          <View>
+                            <View style={styles.selectedPlaceCard}>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.selectedPlaceName}>{destPlace.name}</Text>
+                                <Text style={styles.selectedPlaceDesc}>{destPlace.description}</Text>
+                              </View>
+                              <TouchableOpacity onPress={() => clearSelection('to')} style={styles.clearBtn}>
+                                <Text style={styles.clearText}>Clear</Text>
                               </TouchableOpacity>
-                            ))}
+                            </View>
+                            <TouchableOpacity onPress={handleQuickSaveTp} style={{ marginTop: 12, paddingVertical: 8, alignSelf: 'flex-start' }} disabled={isSavingTp}>
+                              <Text style={{ color: '#4F46E5', fontSize: 14, fontWeight: '700' }}>
+                                {isSavingTp ? 'Saving...' : '+ Save this destination as trusted place'}
+                              </Text>
+                            </TouchableOpacity>
                           </View>
                         )}
-                      </View>
-                    ) : (
-                      <View style={styles.selectedPlaceCard}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.selectedPlaceName}>{destPlace.name}</Text>
-                          <Text style={styles.selectedPlaceDesc}>{destPlace.description}</Text>
-                        </View>
-                        <TouchableOpacity onPress={() => clearSelection('to')} style={styles.clearBtn}>
-                          <Text style={styles.clearText}>Clear</Text>
-                        </TouchableOpacity>
-                      </View>
+                      </>
                     )}
                   </View>
                 </View>
@@ -514,6 +638,56 @@ export const SafeWindowScreen: React.FC = () => {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Trusted Places full-screen picker modal */}
+      <Modal
+        visible={showTrustedPlacesPicker}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowTrustedPlacesPicker(false)}
+      >
+        <SafeAreaView style={{ flex: 1 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' }}>
+            <TouchableOpacity onPress={() => setShowTrustedPlacesPicker(false)} style={{ marginRight: 16 }}>
+              <Text style={{ fontSize: 16, color: '#64748B' }}>✕ Cancel</Text>
+            </TouchableOpacity>
+          </View>
+          <TrustedPlacesScreen
+            selectionMode
+            onSelectPlace={(place) => {
+              setSelectedTrustedPlace(place);
+              setDestPlace(null);
+              setToQuery('');
+              setShowTrustedPlacesPicker(false);
+            }}
+          />
+        </SafeAreaView>
+      </Modal>
+
+      {/* Trusted Place Arrival Modal */}
+      <Modal
+        visible={showArrivalModal}
+        animationType="fade"
+        presentationStyle="overFullScreen"
+        transparent
+        onRequestClose={() => {}}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 20, padding: 32, margin: 24, maxWidth: 400, width: '100%' }}>
+            <Text style={{ fontSize: 24, fontWeight: '900', color: '#1E293B', marginBottom: 12, textAlign: 'center' }}>
+              You've reached your safe place
+            </Text>
+            <Text style={{ fontSize: 16, color: '#64748B', textAlign: 'center', marginBottom: 24, lineHeight: 22 }}>
+              Your Safe Window destination was reached successfully.
+            </Text>
+            <PrimaryButton
+              title="Close Safe Window"
+              onPress={closeArrivalModal}
+              style={{ marginBottom: 0 }}
+            />
+          </View>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -610,5 +784,26 @@ const styles = StyleSheet.create({
   errorBannerCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF2F2', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', marginBottom: 16 },
   errorBannerIcon: { fontSize: 20, marginRight: 12 },
   errorBannerText: { fontSize: 14, color: '#991B1B', flex: 1, fontWeight: '600' }
+});
+
+const tpStyles = StyleSheet.create({
+  chip: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 20, backgroundColor: '#EEF2FF', borderWidth: 1, borderColor: '#C7D2FE',
+    marginRight: 8,
+  },
+  chipIcon: { fontSize: 16, marginRight: 4 },
+  chipName: { fontSize: 13, fontWeight: '600', color: '#3730A3', maxWidth: 90 },
+  selectedCard: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#EEF2FF',
+    borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#C7D2FE',
+  },
+  selectedIcon: { fontSize: 24, marginRight: 10 },
+  selectedName: { fontSize: 15, fontWeight: '700', color: '#3730A3' },
+  selectedRadius: { fontSize: 12, color: '#6366F1', marginTop: 2 },
+  clearTp: {
+    backgroundColor: '#FFFFFF', paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 8, borderWidth: 1, borderColor: '#C7D2FE', marginLeft: 8,
+  },
 });
 

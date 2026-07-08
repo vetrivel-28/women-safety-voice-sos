@@ -8,18 +8,19 @@ import { NotificationProvider } from './src/context/NotificationContext';
 import { FamilyProvider } from './src/context/FamilyContext';
 
 export default function App() {
+  console.log('[PHASE4 BUILD MARKER] phase4-final-startup-v1');
   return (
     <AlertProvider>
       <ContactsProvider>
-        <SafeWindowProvider>
-          <NotificationProvider>
+        <NotificationProvider>
+          <SafeWindowProvider>
             <FamilyProvider>
               <NavigationContainer ref={navigationRef}>
                 <AppNavigator />
               </NavigationContainer>
             </FamilyProvider>
-          </NotificationProvider>
-        </SafeWindowProvider>
+          </SafeWindowProvider>
+        </NotificationProvider>
       </ContactsProvider>
     </AlertProvider>
   );

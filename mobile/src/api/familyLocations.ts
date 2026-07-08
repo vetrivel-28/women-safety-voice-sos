@@ -14,5 +14,10 @@ export const familyLocationsApi = {
   toggleSharing: async (sharingEnabled: boolean): Promise<{ sharing_enabled: boolean }> => {
     const res = await apiClient.patch('/api/family/me/location-sharing', { sharing_enabled: sharingEnabled });
     return res.data;
+  },
+  
+  getNearbyResponders: async (familyId: string): Promise<any> => {
+    const res = await apiClient.get(`/api/family/${familyId}/nearby-responders`);
+    return res.data;
   }
 };
