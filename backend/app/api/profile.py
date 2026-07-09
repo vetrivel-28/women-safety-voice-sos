@@ -15,6 +15,22 @@ router = APIRouter(
 
 
 # ---------------------------------------------------------
+# HELPER: Convert database row to API response
+# ---------------------------------------------------------
+def build_profile_response(data: dict, user_id: str) -> ProfileResponse:
+    return ProfileResponse(
+        user_id=data.get("id") or user_id,
+        email=data.get("email") or "",
+        full_name=data.get("full_name") or "",
+        guardian_code=data.get("guardian_code") or "",
+        name=data.get("full_name") or "",
+        phone=data.get("phone") or "",
+        blood_group=data.get("blood_group") or "",
+        medical_notes=data.get("medical_notes") or "",
+    )
+
+
+# ---------------------------------------------------------
 # GET PROFILE
 # ---------------------------------------------------------
 @router.get("", response_model=ProfileResponse)
@@ -65,30 +81,26 @@ async def get_profile(
         else:
             data = rows[0]
 
-        # -------------------------------------------------
-        # Convert database row to API response
-        # -------------------------------------------------
-        return ProfileResponse(
-            user_id=data.get("id") or user_id,
-            email=data.get("email") or "",
-            full_name=data.get("full_name") or "",
-            guardian_code=data.get("guardian_code") or "",
-            name=data.get("full_name") or "",
-            phone=data.get("phone") or "",
-            blood_group=data.get("blood_group") or "",
-            medical_notes=data.get("medical_notes") or "",
+        return build_profile_response(
+            data=data,
+            user_id=user_id
         )
 
     except HTTPException:
         raise
 
     except Exception as e:
-        logger.exception(
-            "Profile fetch failed for user %s: %s",
+        user_id_for_log = (
             user["user"].id
             if isinstance(user, dict) and user.get("user")
-            else "Unknown",
-            e,
+            else "Unknown"
+        )
+
+        logger.exception(
+            "PROFILE_FETCH_ERROR user=%s type=%s message=%s",
+            user_id_for_log,
+            type(e).__name__,
+            str(e),
         )
 
         raise HTTPException(
@@ -122,9 +134,11 @@ async def update_profile(
             .execute()
         )
 
+        existing_rows = existing.data or []
+
         existing_row = (
-            existing.data[0]
-            if existing.data
+            existing_rows[0]
+            if existing_rows
             else {}
         )
 
@@ -134,6 +148,14 @@ async def update_profile(
         # -------------------------------------------------
         incoming = profile_data.model_dump(
             exclude_unset=True
+        )
+
+        # Safe diagnostic logging.
+        # Do not log JWT tokens or authorization headers.
+        logger.info(
+            "PROFILE_UPDATE_INPUT user=%s fields=%s",
+            user_id,
+            list(incoming.keys()),
         )
 
         update_data = {}
@@ -149,28 +171,25 @@ async def update_profile(
         }
 
         for pydantic_key, db_key in key_mapping.items():
-
             if pydantic_key not in incoming:
                 continue
 
             value = incoming[pydantic_key]
 
-            # Remove accidental spaces
+            # Remove accidental leading/trailing spaces
             if isinstance(value, str):
                 value = value.strip()
 
             # ---------------------------------------------
             # Required text fields
-            #
-            # Do NOT convert empty string to None because
-            # database columns may have NOT NULL constraints
+            # Never convert empty strings to SQL NULL
             # ---------------------------------------------
             if db_key in {"full_name", "phone"}:
                 update_data[db_key] = value or ""
 
             # ---------------------------------------------
             # Optional fields
-            # Empty values may safely become NULL
+            # Empty values may become SQL NULL
             # ---------------------------------------------
             else:
                 update_data[db_key] = (
@@ -178,6 +197,12 @@ async def update_profile(
                     if value not in ("", None)
                     else None
                 )
+
+        logger.info(
+            "PROFILE_UPDATE_PREPARED user=%s columns=%s",
+            user_id,
+            list(update_data.keys()),
+        )
 
         # -------------------------------------------------
         # Nothing changed
@@ -188,7 +213,11 @@ async def update_profile(
         # -------------------------------------------------
         # Update existing profile
         # -------------------------------------------------
-        elif existing.data:
+        elif existing_rows:
+            logger.info(
+                "PROFILE_UPDATE_DB_ACTION user=%s action=update",
+                user_id,
+            )
 
             response = (
                 supabase
@@ -210,6 +239,10 @@ async def update_profile(
         # Create profile if missing
         # -------------------------------------------------
         else:
+            logger.info(
+                "PROFILE_UPDATE_DB_ACTION user=%s action=insert",
+                user_id,
+            )
 
             insert_dict = {
                 **update_data,
@@ -244,18 +277,14 @@ async def update_profile(
 
             data = response.data[0]
 
-        # -------------------------------------------------
-        # Return updated profile
-        # -------------------------------------------------
-        return ProfileResponse(
-            user_id=data.get("id") or user_id,
-            email=data.get("email") or "",
-            full_name=data.get("full_name") or "",
-            guardian_code=data.get("guardian_code") or "",
-            name=data.get("full_name") or "",
-            phone=data.get("phone") or "",
-            blood_group=data.get("blood_group") or "",
-            medical_notes=data.get("medical_notes") or "",
+        logger.info(
+            "PROFILE_UPDATE_SUCCESS user=%s",
+            user_id,
+        )
+
+        return build_profile_response(
+            data=data,
+            user_id=user_id
         )
 
     # -----------------------------------------------------
@@ -265,19 +294,33 @@ async def update_profile(
         raise
 
     # -----------------------------------------------------
-    # Unexpected database / Supabase errors
+    # TEMPORARY DIAGNOSTIC ERROR HANDLING
+    # Shows exact Supabase/PostgreSQL error
     # -----------------------------------------------------
     except Exception as e:
-
-        logger.exception(
-            "Profile update failed for user %s: %s",
+        user_id_for_log = (
             user["user"].id
             if isinstance(user, dict) and user.get("user")
-            else "Unknown",
-            e,
+            else "Unknown"
         )
 
+        error_type = type(e).__name__
+        error_message = str(e)
+
+        logger.exception(
+            "PROFILE_UPDATE_ERROR user=%s type=%s message=%s",
+            user_id_for_log,
+            error_type,
+            error_message,
+        )
+
+        # TEMPORARY DEBUG RESPONSE
+        # Remove detailed message after diagnosis.
         raise HTTPException(
             status_code=503,
-            detail="Profile service temporarily unavailable"
+            detail={
+                "error": "Profile update failed",
+                "type": error_type,
+                "message": error_message,
+            },
         )
