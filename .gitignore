@@ -26,3 +26,5 @@ check_schema.py
 .env
 .env.*
 *.local
+# Local native ASR artifacts
+mobile/native-artifacts/
