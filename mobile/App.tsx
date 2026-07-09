@@ -6,22 +6,32 @@ import { ContactsProvider } from './src/context/ContactsContext';
 import { SafeWindowProvider } from './src/context/SafeWindowContext';
 import { NotificationProvider } from './src/context/NotificationContext';
 import { FamilyProvider } from './src/context/FamilyContext';
+import { RingProvider } from './src/hardware/RingContext';
+import { useRingSOS } from './src/hardware/useRing';
+
+// A component to run hardware ring hooks inside AlertProvider
+function HardwareRingController() {
+  useRingSOS();
+  return null;
+}
 
 export default function App() {
-  console.log('[PHASE4 BUILD MARKER] phase4-final-startup-v1');
   return (
-    <AlertProvider>
-      <ContactsProvider>
-        <NotificationProvider>
+    <RingProvider>
+      <AlertProvider>
+        <ContactsProvider>
           <SafeWindowProvider>
-            <FamilyProvider>
-              <NavigationContainer ref={navigationRef}>
-                <AppNavigator />
-              </NavigationContainer>
-            </FamilyProvider>
+            <NotificationProvider>
+              <FamilyProvider>
+                <NavigationContainer ref={navigationRef}>
+                  <HardwareRingController />
+                  <AppNavigator />
+                </NavigationContainer>
+              </FamilyProvider>
+            </NotificationProvider>
           </SafeWindowProvider>
-        </NotificationProvider>
-      </ContactsProvider>
-    </AlertProvider>
+        </ContactsProvider>
+      </AlertProvider>
+    </RingProvider>
   );
 }

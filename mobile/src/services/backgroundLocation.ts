@@ -18,7 +18,7 @@ const backgroundTask = async (taskDataArguments: any) => {
     });
 };
 
-const options = {
+const options: any = {
     taskName: 'SafeHerJourney',
     taskTitle: 'SafeHer Journey Mode is active',
     taskDesc: 'Monitoring your location for safety',
@@ -31,6 +31,7 @@ const options = {
     parameters: {
         delay: 5000,
     },
+    foregroundServiceType: ['location'],
 };
 
 export const startBackgroundLocationService = async (reason: string = 'unknown') => {

@@ -10,7 +10,9 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "SafeHer uses your location to attach it to SOS alerts so your contacts know where you are."
+        "NSLocationWhenInUseUsageDescription": "SafeHer uses your location to attach it to SOS alerts so your contacts know where you are.",
+        "NSBluetoothAlwaysUsageDescription": "SafeHer uses Bluetooth to connect to your SafeHer Smart Ring.",
+        "NSBluetoothPeripheralUsageDescription": "SafeHer uses Bluetooth to communicate with your SafeHer Smart Ring."
       }
     },
     "android": {
@@ -23,8 +25,10 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION"
       ]
@@ -43,7 +47,7 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": false
+            "usesCleartextTraffic": true
           }
         }
       ],
@@ -54,13 +58,7 @@
           "icon": "./assets/icon.png",
           "color": "#DC2626"
         }
-      ],
-      "@maplibre/maplibre-react-native"
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "a4810f8c-7b06-41fa-9665-803939136c99"
-      }
-    }
+      ]
+    ]
   }
 }
