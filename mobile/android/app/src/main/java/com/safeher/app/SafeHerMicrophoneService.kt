@@ -59,6 +59,20 @@ class SafeHerMicrophoneService : Service() {
     private var speechEnterCount = 0
     private var speechExitCount = 0
 
+    // POC 5A ASR State
+    private var asrWorkerThread: Thread? = null
+    private var asrQueue: ArrayBlockingQueue<AsrSegment>? = null
+    private var asrEngine: SafeHerOfflineAsrEngine? = null
+    @Volatile private var isAsrWorkerRunning = false
+    private var nextSegmentId = 1
+    
+    private data class AsrSegment(
+        val id: Int,
+        val samples: FloatArray,
+        val finalizedAtMs: Long,
+        val audioDurationMs: Double
+    )
+
     // POC 4A Speech Segment Collector State
     private val speechPreRollFrames = ArrayDeque<ShortArray>()
     private val activeSpeechSegmentFrames = ArrayList<ShortArray>()
@@ -267,6 +281,19 @@ class SafeHerMicrophoneService : Service() {
                 Log.i("SafeHerMicService", "VAD Worker Initialized")
             } catch (e: Exception) {
                 Log.e("SafeHerMicService", "VAD Worker Initialization Failed", e)
+            }
+
+            // Live ASR Init
+            try {
+                asrQueue = ArrayBlockingQueue(2)
+                isAsrWorkerRunning = true
+                nextSegmentId = 1
+                asrWorkerThread = Thread {
+                    asrWorkerLoop()
+                }.apply { start() }
+                Log.i("SafeHerLiveASR", "LIVE_ASR_WORKER_STARTED")
+            } catch (e: Exception) {
+                Log.e("SafeHerLiveASR", "Live ASR Worker Initialization Failed", e)
             }
 
             recordingThread = Thread {
@@ -510,6 +537,17 @@ class SafeHerMicrophoneService : Service() {
         } catch (e: Exception) {
             Log.e("SafeHerMicService", "VAD Cleanup Error", e)
         }
+
+        try {
+            isAsrWorkerRunning = false
+            asrWorkerThread?.interrupt()
+            asrWorkerThread?.join(1000)
+            asrWorkerThread = null
+            asrQueue?.clear()
+            asrQueue = null
+        } catch (e: Exception) {
+            Log.e("SafeHerMicService", "ASR Cleanup Error", e)
+        }
     }
 
     override fun onDestroy() {
@@ -725,6 +763,35 @@ class SafeHerMicrophoneService : Service() {
             "SPEECH_SEGMENT_FINALIZED samples=$sampleCount durationMs=$durationMs frames=${activeSpeechSegmentFrames.size}"
         )
 
+        // --- NEW ASR INTEGRATION ---
+        val segmentId = nextSegmentId++
+        val floatSamples = FloatArray(sampleCount)
+        var offset = 0
+        for (chunk in activeSpeechSegmentFrames) {
+            for (i in chunk.indices) {
+                floatSamples[offset++] = chunk[i].toFloat() / 32768.0f
+            }
+        }
+        
+        val finalizedAtMs = android.os.SystemClock.elapsedRealtime()
+        val audioDurationMs = sampleCount * 1000.0 / 16000.0
+        
+        Log.i("SafeHerLiveASR", "LIVE_ASR_PCM_CONVERTED id=$segmentId chunks=${activeSpeechSegmentFrames.size} samples=$sampleCount")
+        Log.i("SafeHerLiveASR", "LIVE_ASR_SEGMENT_FINALIZED id=$segmentId samples=$sampleCount audioDurationMs=$audioDurationMs")
+        
+        val queue = asrQueue
+        if (queue != null) {
+            val segment = AsrSegment(segmentId, floatSamples, finalizedAtMs, audioDurationMs)
+            val queueDepthBefore = queue.size
+            if (queue.offer(segment)) {
+                val queueDepthAfter = queue.size
+                Log.i("SafeHerLiveASR", "LIVE_ASR_SEGMENT_SUBMITTED id=$segmentId samples=$sampleCount queueDepthBefore=$queueDepthBefore queueDepthAfter=$queueDepthAfter")
+            } else {
+                Log.w("SafeHerLiveASR", "LIVE_ASR_SEGMENT_DROPPED id=$segmentId reason=\"queue_full\"")
+            }
+        }
+        // ---------------------------
+
         speechSegmentStartTimeMs = 0L
     }
 
@@ -775,5 +842,120 @@ class SafeHerMicrophoneService : Service() {
         params.putString("state", state)
         reactContext?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
             ?.emit("onVoiceMonitoringState", params)
+    }
+
+    private fun asrWorkerLoop() {
+        Log.i("SafeHerLiveASR", "LIVE_ASR_ENGINE_INIT_STARTED")
+        
+        val destFile = java.io.File(filesDir, "ggml-tiny.en-q5_1.bin")
+        if (!destFile.exists()) {
+            try {
+                assets.open("models/ggml-tiny.en-q5_1.bin").use { input ->
+                    java.io.FileOutputStream(destFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("SafeHerLiveASR", "LIVE_ASR_ENGINE_INIT_FAILED error=\"Failed to copy model\"")
+            }
+        }
+
+        asrEngine = SafeHerOfflineAsrEngine()
+        val isReady = asrEngine?.initModel(destFile.absolutePath) ?: false
+        if (isReady) {
+            Log.i("SafeHerLiveASR", "LIVE_ASR_ENGINE_INIT_READY")
+        } else {
+            Log.e("SafeHerLiveASR", "LIVE_ASR_ENGINE_INIT_FAILED error=\"Model initialization failed\"")
+        }
+
+        while (isAsrWorkerRunning) {
+            try {
+                val queue = asrQueue ?: break
+                val segment = queue.poll(100, TimeUnit.MILLISECONDS)
+                if (segment != null) {
+                    val startedAtMs = android.os.SystemClock.elapsedRealtime()
+                    val queueWaitMs = startedAtMs - segment.finalizedAtMs
+                    
+                    if (!isReady) {
+                        Log.e("SafeHerLiveASR", "LIVE_ASR_SEGMENT_FAILED id=${segment.id} error=\"Engine not ready\"")
+                        continue
+                    }
+                    
+                    Log.i("SafeHerLiveASR", "LIVE_ASR_SEGMENT_STARTED id=${segment.id} samples=${segment.samples.size} queueWaitMs=$queueWaitMs audioDurationMs=${segment.audioDurationMs}")
+                    
+                    Log.i("SafeHerLiveASR", "LIVE_ASR_NATIVE_CALL_STARTED id=${segment.id}")
+                    val nativeCallStartedAtMs = android.os.SystemClock.elapsedRealtime()
+                    val rawTranscript = asrEngine?.transcribe(segment.samples) ?: ""
+                    val nativeCallFinishedAtMs = android.os.SystemClock.elapsedRealtime()
+                    
+                    val nativeCallMs = nativeCallFinishedAtMs - nativeCallStartedAtMs
+                    Log.i("SafeHerLiveASR", "LIVE_ASR_NATIVE_CALL_FINISHED id=${segment.id} nativeCallMs=$nativeCallMs")
+                    
+                    val totalSinceFinalizeMs = nativeCallFinishedAtMs - segment.finalizedAtMs
+                    val realTimeFactor = if (segment.audioDurationMs > 0) {
+                        nativeCallMs.toDouble() / segment.audioDurationMs
+                    } else 0.0
+                    
+                    if (rawTranscript.isBlank()) {
+                        Log.i("SafeHerLiveASR", "LIVE_ASR_SEGMENT_EMPTY id=${segment.id} queueWaitMs=$queueWaitMs nativeCallMs=$nativeCallMs totalSinceFinalizeMs=$totalSinceFinalizeMs audioDurationMs=${segment.audioDurationMs} realTimeFactor=$realTimeFactor")
+                    } else {
+                        val escapedText = rawTranscript.replace("\"", "\\\"").replace("\n", "\\n")
+                        Log.i("SafeHerLiveASR", "LIVE_ASR_SEGMENT_RESULT id=${segment.id} text=\"$escapedText\" queueWaitMs=$queueWaitMs nativeCallMs=$nativeCallMs totalSinceFinalizeMs=$totalSinceFinalizeMs audioDurationMs=${segment.audioDurationMs} realTimeFactor=$realTimeFactor")
+                    }
+
+                    // --- DIAGNOSTIC CLASSIFICATION ---
+                    val trimmed = rawTranscript.trim()
+                    val category: String
+                    var diagnosticCleaned = trimmed
+                    
+                    if (trimmed.isEmpty()) {
+                        category = "EMPTY"
+                    } else if (trimmed.equals("[BLANK_AUDIO]", ignoreCase = true)) {
+                        category = "BLANK_AUDIO_MARKER"
+                    } else if (trimmed.equals("[Mumbling]", ignoreCase = true)) {
+                        category = "MUMBLING_MARKER"
+                    } else {
+                        // Check if it contains any letters or digits
+                        var hasAlphanumeric = false
+                        for (c in trimmed) {
+                            if (c.isLetterOrDigit()) {
+                                hasAlphanumeric = true
+                                break
+                            }
+                        }
+                        if (!hasAlphanumeric) {
+                            category = "PUNCTUATION_ONLY"
+                        } else {
+                            category = "CONTENT"
+                            // Create diagnosticCleaned
+                            diagnosticCleaned = trimmed
+                                .replace(Regex("(?i)\\[BLANK_AUDIO\\]"), "")
+                                .replace(Regex("(?i)\\[Mumbling\\]"), "")
+                                .trim()
+                        }
+                    }
+                    
+                    val escapedRaw = rawTranscript.replace("\"", "\\\"").replace("\n", "\\n")
+                    val escapedCleaned = diagnosticCleaned.replace("\"", "\\\"").replace("\n", "\\n")
+                    Log.i("SafeHerLiveASR", "LIVE_ASR_TRANSCRIPT_CLASSIFIED id=${segment.id} category=$category raw=\"$escapedRaw\" diagnosticCleaned=\"$escapedCleaned\"")
+                    
+                    if (category == "CONTENT" || category == "PUNCTUATION_ONLY") {
+                        SafeHerEmergencyIntentDetector.analyze(segment.id, diagnosticCleaned)
+                        // No real SOS triggered. Diagnostic only.
+                    }
+                    // ---------------------------------
+                }
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            } catch (e: Exception) {
+                Log.e("SafeHerLiveASR", "ASR Worker Exception", e)
+            }
+        }
+        
+        asrEngine?.close()
+        asrEngine = null
+        Log.i("SafeHerLiveASR", "LIVE_ASR_ENGINE_SHUTDOWN")
+        Log.i("SafeHerLiveASR", "LIVE_ASR_WORKER_STOPPED")
     }
 }
