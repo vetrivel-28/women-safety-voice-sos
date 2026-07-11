@@ -1,7 +1,8 @@
 import React, { createContext, useState, useContext, useEffect, useRef } from 'react';
-import { SafeWindowState, SafeWindowDuration } from '../types';
+import { SafeWindowState, SafeWindowDuration, TrustedPlace } from '../types';
 import { useAlert } from './AlertContext';
 import { getCurrentLocationForAlert } from '../utils/location';
+import * as Location from 'expo-location';
 import { distanceBetweenPointsMeters, isRouteDeviation } from '../utils/geoUtils';
 import { useContacts } from './ContactsContext';
 import { getRoute } from '../services/geocodingService';
@@ -22,7 +23,8 @@ interface SafeWindowContextType {
     durationMinutes: SafeWindowDuration,
     checkInMinutes: number,
     startLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string },
-    destLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }
+    destLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string },
+    trustedPlace?: TrustedPlace | null
   ) => void;
   endSafeWindow: () => void;
   markCheckInSafe: () => void;
@@ -36,6 +38,8 @@ interface SafeWindowContextType {
   openBatterySettings: () => void;
   checkAndPromptBatteryExemption: () => Promise<void>;
   isStartingJourney: boolean;
+  showArrivalModal: boolean;
+  closeArrivalModal: () => void;
 }
 
 const SafeWindowContext = createContext<SafeWindowContextType | undefined>(undefined);
@@ -58,7 +62,11 @@ const initialState: SafeWindowState = {
 
 export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [safeWindow, setSafeWindow] = useState<SafeWindowState>(initialState);
+  const [isStartingJourney, setIsStartingJourney] = useState(false);
+  const [showArrivalModal, setShowArrivalModal] = useState(false);
   const [distanceToDestination, setDistanceToDestination] = useState<number | null>(null);
+
+  const closeArrivalModal = () => setShowArrivalModal(false);
   const { createAlert } = useAlert();
   const { getPrimaryContact } = useContacts();
   const missedAlertCreated = useRef(false);
@@ -69,7 +77,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const startInFlightRef = useRef(false);
   const restoreInFlightRef = useRef(false);
   const [batteryOptimizationDenied, setBatteryOptimizationDenied] = useState(false);
-  const [isStartingJourney, setIsStartingJourney] = useState(false);
+
   const activeNotificationId = useRef<string | null>(null);
 
   // Location Sync Refs
@@ -257,7 +265,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   };
 
-  const startSafeWindow = async (durationMinutes: SafeWindowDuration, checkInMinutes: number, startLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }, destLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }) => {
+  const startSafeWindow = async (durationMinutes: SafeWindowDuration, checkInMinutes: number, startLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }, destLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }, trustedPlace?: TrustedPlace | null) => {
     if (startInFlightRef.current || completeInFlightRef.current || safeWindow.status === 'ACTIVE') {
       throw new Error("Action currently in flight or another journey is already active.");
     }
@@ -282,6 +290,19 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         } catch (e) { console.warn("Failed to get current location", e); }
       }
 
+      if (!actualStartLoc) {
+        throw new Error("Cannot start journey without a current location. Please enable GPS.");
+      }
+
+      // Validate coordinates are finite
+      if (!Number.isFinite(actualStartLoc.latitude) || !Number.isFinite(actualStartLoc.longitude)) {
+        throw new Error("Invalid start location coordinates. Please try again.");
+      }
+
+      if (destLoc && (!Number.isFinite(destLoc.latitude) || !Number.isFinite(destLoc.longitude))) {
+        throw new Error("Invalid destination location coordinates. Please try again.");
+      }
+
       let initialRoute: { lat: number, lon: number }[] = [];
       if (actualStartLoc && actualStartLoc.latitude && actualStartLoc.longitude && destLoc && destLoc.latitude && destLoc.longitude) {
         initialRoute = [{ lat: actualStartLoc.latitude, lon: actualStartLoc.longitude }, { lat: destLoc.latitude, lon: destLoc.longitude }];
@@ -303,6 +324,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           start_label: "Current Location",
           ...(actualStartLoc ? { start_latitude: actualStartLoc.latitude, start_longitude: actualStartLoc.longitude, start_address: actualStartLoc.address, start_place_id: (actualStartLoc as any).placeId, location_provider: (actualStartLoc as any).provider || (destLoc as any)?.provider } : {}),
           ...(destLoc ? { destination_label: "Destination", destination_latitude: destLoc.latitude, destination_longitude: destLoc.longitude, destination_address: destLoc.address, destination_place_id: (destLoc as any).placeId, location_provider: (destLoc as any).provider || (actualStartLoc as any)?.provider } : {}),
+          trusted_place_id: trustedPlace?.id ?? null,
           ...(demoMode ? {
             duration_seconds: 30,
             duration_minutes: 1,
@@ -318,12 +340,14 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           })
         };
 
-        console.log(`[DEBUG] POST /api/journeys executing for user: ${session.user?.id}`);
+        console.log("[SafeWindowStart] payload:", payload);
         const response = await apiClient.post('/api/journeys', payload);
         journeyData = response.data;
-        console.log(`[DEBUG] POST /api/journeys returned journeyId: ${journeyData.id} assigned to user: ${journeyData.user_id}`);
+        console.log("[SafeWindowStart] response:", journeyData);
       } catch (e: any) {
         console.warn("Could not sync journey start to backend", e);
+        console.error("[SafeWindowStart] failed:", e.response?.status, e.response?.data);
+        
         let errorMessage = "Could not start Safe Window. Please try again.";
 
         if (e.response) {
@@ -342,6 +366,14 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             } catch (retryErr) {
               throw new Error(errorMessage);
             }
+          } else {
+            let errorDetail = e.response.data?.detail || e.response.data?.message || errorMessage;
+            if (Array.isArray(errorDetail)) {
+              errorDetail = errorDetail.map((err: any) => err.msg || JSON.stringify(err)).join(", ");
+            } else if (typeof errorDetail === 'object' && errorDetail !== null) {
+              errorDetail = JSON.stringify(errorDetail);
+            }
+            errorMessage = typeof errorDetail === 'string' ? errorDetail : errorMessage;
           }
         } else if (e.message?.includes('Network Error') || e.message?.includes('timeout') || e.message?.includes('Network request failed')) {
           errorMessage = "Could not reach backend. Check Wi-Fi/backend.";
@@ -550,7 +582,9 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   useEffect(() => {
     let timerInterval: NodeJS.Timeout;
-    let locationInterval: NodeJS.Timeout;
+    let locationSubscription: Location.LocationSubscription | null = null;
+    let watchPromise: Promise<Location.LocationSubscription> | null = null;
+    let isMounted = true;
 
     const checkTimers = () => {
       if (safeWindow.status !== 'ACTIVE') return;
@@ -564,109 +598,140 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
     };
 
-    const checkLocation = () => {
-      if (safeWindow.status !== 'ACTIVE') return;
-      const now = new Date().getTime();
+    const startLocationWatcher = async () => {
+      try {
+        console.log("[SafeWindowContext] Requesting foreground permissions for watcher...");
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          console.warn("[SafeWindowContext] Location permissions not granted for watcher.");
+          return;
+        }
+        if (!isMounted) return;
+        console.log("[SafeWindowContext] Location permission granted. Starting watcher...");
 
-      getCurrentLocationForAlert().then(async loc => {
-        if (!loc || loc.permissionDenied) return;
-        const currentLoc = { lat: loc.latitude, lon: loc.longitude };
+        watchPromise = Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            timeInterval: 5000,
+            distanceInterval: 10,
+          },
+          async (loc) => {
+            if (!isMounted || safeWindow.status !== 'ACTIVE') return;
+            console.log(`[SafeWindowContext] Watcher received location: lat=${loc.coords.latitude}, lon=${loc.coords.longitude}, accuracy=${loc.coords.accuracy}`);
+            
+            const now = new Date().getTime();
+            const currentLoc = { lat: loc.coords.latitude, lon: loc.coords.longitude };
+            const capturedAt = new Date(loc.timestamp).toISOString();
 
-        // 1. Sync backend tracking (every 20s OR > 25m movement)
-        if (safeWindow.journeyId && !isSyncingLocationRef.current) {
-          const timeSinceSync = now - lastBackendSyncRef.current;
-          let shouldSync = false;
+            // 1. Sync backend tracking (every 20s OR > 25m movement)
+            if (safeWindow.journeyId && !isSyncingLocationRef.current) {
+              const timeSinceSync = now - lastBackendSyncRef.current;
+              let shouldSync = false;
 
-          if (timeSinceSync >= 20000 || unsentLocRef.current) {
-            shouldSync = true;
-          } else if (lastSyncedLocRef.current) {
-            const distSinceSync = distanceBetweenPointsMeters(
-              currentLoc.lat, currentLoc.lon,
-              lastSyncedLocRef.current.lat, lastSyncedLocRef.current.lon
-            );
-            if (distSinceSync > 25) shouldSync = true;
-          }
-
-          if (shouldSync) {
-            isSyncingLocationRef.current = true;
-            const payload = unsentLocRef.current ? {
-              latitude: unsentLocRef.current.lat,
-              longitude: unsentLocRef.current.lon,
-              accuracy: unsentLocRef.current.accuracy,
-              captured_at: unsentLocRef.current.captured_at,
-              provider: unsentLocRef.current.provider
-            } : {
-              latitude: currentLoc.lat,
-              longitude: currentLoc.lon,
-              accuracy: loc.accuracy,
-              captured_at: loc.captured_at,
-              provider: loc.provider
-            };
-
-            try {
-              await apiClient.patch(`/api/journeys/${safeWindow.journeyId}/location`, payload);
-              lastBackendSyncRef.current = now;
-              lastSyncedLocRef.current = currentLoc;
-              unsentLocRef.current = null;
-            } catch (e) {
-              console.warn("Could not sync location to backend (offline/network issue)", e);
-              if (!unsentLocRef.current) {
-                unsentLocRef.current = { lat: currentLoc.lat, lon: currentLoc.lon, accuracy: loc.accuracy, captured_at: loc.captured_at, provider: loc.provider };
+              if (timeSinceSync >= 20000 || unsentLocRef.current) {
+                shouldSync = true;
+              } else if (lastSyncedLocRef.current) {
+                const distSinceSync = distanceBetweenPointsMeters(
+                  currentLoc.lat, currentLoc.lon,
+                  lastSyncedLocRef.current.lat, lastSyncedLocRef.current.lon
+                );
+                if (distSinceSync > 25) shouldSync = true;
               }
-            } finally {
-              isSyncingLocationRef.current = false;
+
+              if (shouldSync) {
+                isSyncingLocationRef.current = true;
+                const payload = unsentLocRef.current ? {
+                  latitude: unsentLocRef.current.lat,
+                  longitude: unsentLocRef.current.lon,
+                  accuracy: unsentLocRef.current.accuracy,
+                  captured_at: unsentLocRef.current.captured_at,
+                  provider: unsentLocRef.current.provider
+                } : {
+                  latitude: currentLoc.lat,
+                  longitude: currentLoc.lon,
+                  accuracy: loc.coords.accuracy || 9999,
+                  captured_at: capturedAt,
+                  provider: 'watchPosition'
+                };
+
+                try {
+                  console.log(`[SafeWindowContext] Syncing location to backend... Payload:`, payload);
+                  await apiClient.patch(`/api/journeys/${safeWindow.journeyId}/location`, payload);
+                  console.log(`[SafeWindowContext] Backend location sync successful.`);
+                  lastBackendSyncRef.current = now;
+                  lastSyncedLocRef.current = currentLoc;
+                  unsentLocRef.current = null;
+                } catch (e) {
+                  console.warn("[SafeWindowContext] Could not sync location to backend (offline/network issue)", e);
+                  if (!unsentLocRef.current) {
+                    unsentLocRef.current = { lat: currentLoc.lat, lon: currentLoc.lon, accuracy: loc.coords.accuracy || 9999, captured_at: capturedAt, provider: 'watchPosition' };
+                  }
+                } finally {
+                  isSyncingLocationRef.current = false;
+                }
+              }
+            }
+
+            // 2. Distance check (independent of route points)
+            if (safeWindow.destinationLocation && !safeWindow.demoMode &&
+              typeof safeWindow.destinationLocation.latitude === 'number' &&
+              typeof safeWindow.destinationLocation.longitude === 'number' &&
+              typeof currentLoc.lat === 'number' && typeof currentLoc.lon === 'number') {
+              const destLoc = { lat: safeWindow.destinationLocation.latitude, lon: safeWindow.destinationLocation.longitude };
+              const distToDest = distanceBetweenPointsMeters(currentLoc.lat, currentLoc.lon, destLoc.lat, destLoc.lon);
+              setDistanceToDestination(distToDest);
+            } else {
+              setDistanceToDestination(null);
+            }
+
+            // 3. Route deviation check
+            if (safeWindow.routePoints && safeWindow.routePoints.length > 2 && safeWindow.destinationLocation && !safeWindow.routeDeviationDetected && !safeWindow.demoMode) {
+              if (isRouteDeviation(currentLoc, safeWindow.routePoints!, 300)) {
+                setSafeWindow(prev => {
+                  if (prev.routeDeviationDetected) return prev;
+                  if (!prev.routeDeviationWarningAt) {
+                    const promptTime = new Date(now + 60 * 1000).toISOString();
+                    scheduleNextNotification(promptTime, prev.demoMode || false);
+                    return { ...prev, routeDeviationWarningAt: new Date().toISOString(), checkInDueAt: promptTime };
+                  }
+
+                  const warningTime = new Date(prev.routeDeviationWarningAt).getTime();
+                  if (now - warningTime >= 60000) {
+                    return { ...prev, routeDeviationDetected: true };
+                  }
+                  return prev;
+                });
+              } else {
+                setSafeWindow(prev => {
+                  if (prev.routeDeviationWarningAt && !prev.routeDeviationDetected) {
+                    return { ...prev, routeDeviationWarningAt: null };
+                  }
+                  return prev;
+                });
+              }
+            } else {
+              setDistanceToDestination(null);
             }
           }
+        );
+        
+        locationSubscription = await watchPromise;
+        
+        // If the component unmounted while we were awaiting the promise
+        if (!isMounted && locationSubscription) {
+          console.log("[SafeWindowContext] Stopping delayed location watcher.");
+          locationSubscription.remove();
+          locationSubscription = null;
         }
 
-        // 2. Distance check (independent of route points)
-        if (safeWindow.destinationLocation && !safeWindow.demoMode &&
-          typeof safeWindow.destinationLocation.latitude === 'number' &&
-          typeof safeWindow.destinationLocation.longitude === 'number' &&
-          typeof currentLoc.lat === 'number' && typeof currentLoc.lon === 'number') {
-          const destLoc = { lat: safeWindow.destinationLocation.latitude, lon: safeWindow.destinationLocation.longitude };
-          const distToDest = distanceBetweenPointsMeters(currentLoc.lat, currentLoc.lon, destLoc.lat, destLoc.lon);
-          setDistanceToDestination(distToDest);
-        } else {
-          setDistanceToDestination(null);
-        }
-
-        // 3. Route deviation check
-        if (safeWindow.routePoints && safeWindow.routePoints.length > 2 && safeWindow.destinationLocation && !safeWindow.routeDeviationDetected && !safeWindow.demoMode) {
-          if (isRouteDeviation(currentLoc, safeWindow.routePoints!, 300)) {
-            setSafeWindow(prev => {
-              if (prev.routeDeviationDetected) return prev;
-              if (!prev.routeDeviationWarningAt) {
-                const promptTime = new Date(now + 60 * 1000).toISOString();
-                scheduleNextNotification(promptTime, prev.demoMode || false);
-                return { ...prev, routeDeviationWarningAt: new Date().toISOString(), checkInDueAt: promptTime };
-              }
-
-              const warningTime = new Date(prev.routeDeviationWarningAt).getTime();
-              if (now - warningTime >= 60000) {
-                return { ...prev, routeDeviationDetected: true };
-              }
-              return prev;
-            });
-          } else {
-            setSafeWindow(prev => {
-              if (prev.routeDeviationWarningAt && !prev.routeDeviationDetected) {
-                return { ...prev, routeDeviationWarningAt: null };
-              }
-              return prev;
-            });
-          }
-        } else {
-          setDistanceToDestination(null);
-        }
-      }).catch(err => {
-        if (__DEV__) console.log("SafeWindow location check failed", err);
-      });
+      } catch (err) {
+        console.error("[SafeWindowContext] Error starting watcher", err);
+      }
     };
 
     if (safeWindow.status === 'ACTIVE') {
       timerInterval = setInterval(checkTimers, 1000);
-      locationInterval = setInterval(checkLocation, 5000);
+      startLocationWatcher();
     }
 
     const subscription = AppState.addEventListener('change', nextAppState => {
@@ -676,8 +741,15 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     });
 
     return () => {
+      isMounted = false;
       if (timerInterval) clearInterval(timerInterval);
-      if (locationInterval) clearInterval(locationInterval);
+      if (locationSubscription) {
+        console.log("[SafeWindowContext] Stopping location watcher.");
+        locationSubscription.remove();
+      } else if (watchPromise) {
+        console.log("[SafeWindowContext] Resolving pending watcher for cleanup.");
+        watchPromise.then(sub => sub.remove()).catch(() => {});
+      }
       subscription.remove();
     };
   }, [safeWindow.status, safeWindow.endsAt, safeWindow.checkInDueAt, safeWindow.routePoints, safeWindow.routeDeviationDetected, safeWindow.routeDeviationWarningAt, safeWindow.demoMode]);
@@ -715,7 +787,9 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       batteryOptimizationDenied,
       openBatterySettings,
       checkAndPromptBatteryExemption,
-      isStartingJourney
+      isStartingJourney,
+      showArrivalModal,
+      closeArrivalModal
     }}>
       {children}
     </SafeWindowContext.Provider>

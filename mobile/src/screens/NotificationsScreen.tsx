@@ -3,14 +3,21 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNotifications } from '../context/NotificationContext';
 import { PrimaryButton } from '../components/PrimaryButton';
+import { useNavigation, NavigationProp } from '@react-navigation/native';
+import { RootStackParamList } from '../types';
+import { navigateFromNotification } from '../utils/notificationNavigation';
 
 export const NotificationsScreen: React.FC = () => {
   const { notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications();
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
 
   const renderItem = ({ item }: { item: any }) => (
     <TouchableOpacity 
       style={[styles.card, !item.read_at && styles.unreadCard]}
-      onPress={() => markAsRead(item.id)}
+      onPress={async () => {
+        await markAsRead(item.id);
+        navigateFromNotification(navigation, item);
+      }}
     >
       <View style={styles.cardHeader}>
         <Text style={styles.title}>{item.title || 'Notification'}</Text>

@@ -5,10 +5,10 @@ export class NominatimProvider implements GeocodingProvider {
     try {
       // Note: Public Nominatim API is for demo/testing and has usage limits, not for production SLA
       // Bias search to Tamil Nadu
-      const searchBox = `76.0,13.7,80.5,8.0`; // left,top,right,bottom (lon, lat)
+      const searchBox = `76.0,13.6,80.4,8.0`; // left,top,right,bottom (lon, lat)
       const searchQuery = query.toLowerCase().includes('tamil nadu') ? query : `${query}, Tamil Nadu`;
       
-      let url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery)}&format=json&limit=10&addressdetails=1&viewbox=${searchBox}&bounded=1`;
+      let url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery)}&format=json&limit=5&addressdetails=1&viewbox=${searchBox}&bounded=1&countrycodes=in`;
       const response = await fetch(url, {
         headers: {
           'Accept': 'application/json',

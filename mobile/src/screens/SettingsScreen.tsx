@@ -34,14 +34,19 @@ export const SettingsScreen: React.FC = () => {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      if (session?.user?.email) {
-        setUserEmail(session.user.email);
+      if (session?.user) {
+        setUserEmail(
+            session.user.email ||
+            session.user.phone ||
+            "Unknown"
+        );
         fetchProfile();
       }
     });
   }, []);
 
   const fetchProfile = async () => {
+    console.log("fetchProfile() called");
     setIsLoadingProfile(true);
     addLog('--- FETCH PROFILE START ---');
 
@@ -50,6 +55,8 @@ export const SettingsScreen: React.FC = () => {
       addLog(`-> GET STATUS: ${response.status}`);
 
       const parsed = response.data;
+      console.log("Profile API Response:", response);
+      console.log("Profile JSON:", parsed);
       if (parsed) {
         setOriginalProfile(parsed);
         setName(parsed.name || '');
