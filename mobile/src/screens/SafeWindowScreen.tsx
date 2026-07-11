@@ -43,9 +43,10 @@ export const SafeWindowScreen: React.FC = () => {
   const [showTrustedPlacesPicker, setShowTrustedPlacesPicker] = useState(false);
 
   const loadTrustedPlaces = () => {
+    console.log('[TrustedPlaces] fetch triggered');
     trustedPlacesApi.list()
       .then(data => setTrustedPlaces(data))
-      .catch(() => {}); // non-fatal
+      .catch((err) => console.error('[TrustedPlaces] load failed:', err));
   };
 
   useEffect(() => {

@@ -153,13 +153,13 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setFamily(fam);
       currentFamilyIdRef.current = fam.id;
 
-      // Dashboard data (sos + journeys)
-      const dashResponse = await apiClient.get(`/api/family/${fam.id}/dashboard`);
+      const [dashResponse, membersResponse] = await Promise.all([
+        apiClient.get(`/api/family/${fam.id}/dashboard`),
+        apiClient.get(`/api/family/${fam.id}/members`)
+      ]);
+      
       setActiveSOS(dashResponse.data.active_sos || []);
       setActiveJourneys(dashResponse.data.active_journeys || []);
-
-      // Members list
-      const membersResponse = await apiClient.get(`/api/family/${fam.id}/members`);
       setMembers(membersResponse.data || []);
 
       // If host, fetch pending join requests from backend (no direct Supabase needed)

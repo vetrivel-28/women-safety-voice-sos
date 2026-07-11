@@ -15,6 +15,11 @@ from app.services.escalation_worker import sos_escalation_loop
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure a root handler exists, then explicitly enable INFO for the worker
+    logging.basicConfig(level=logging.WARNING)
+    logging.getLogger().setLevel(logging.INFO)  # force root level even if handlers already exist
+    logging.getLogger("app.services.escalation_worker").setLevel(logging.INFO)
+
     logger.info("--- Starting FastAPI Application ---")
     
     # Start SOS escalation worker
