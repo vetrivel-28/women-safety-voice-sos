@@ -19,26 +19,36 @@ async def sos_escalation_loop():
             t0 = time.perf_counter()
             alerts_res = service_client.table("sos_alerts").select("id").eq("status", "ACTIVE").execute()
             t1 = time.perf_counter()
-            logger.info(f"[TIMING] sos_alerts query: {(t1-t0)*1000:.1f}ms")
-            
-            active_alert_ids = [a["id"] for a in (alerts_res.data or [])]
-            
-            if not active_alert_ids:
+            logger.info(f"[TIMING] Active SOS alerts query: {(t1-t0)*1000:.1f}ms")
+
+            active_alerts = alerts_res.data or []
+            if not active_alerts:
                 continue
+
+            # 2. Batch-fetch targets for all active alerts to avoid N+1 queries
+            t2 = time.perf_counter()
+            alert_ids = [alert["id"] for alert in active_alerts]
+            targets_res = service_client.table("sos_escalation_targets")\
+                .select("*")\
+                .in_("sos_alert_id", alert_ids)\
+                .is_("acknowledged_at", "null")\
+                .order("priority_order")\
+                .execute()
+            
+            all_targets = targets_res.data or []
+            t3 = time.perf_counter()
+            logger.info(f"[TIMING] Batch sos_escalation_targets query for {len(alert_ids)} alerts: {(t3-t2)*1000:.1f}ms")
+
+            # Group targets by alert_id
+            from collections import defaultdict
+            targets_by_alert = defaultdict(list)
+            for t in all_targets:
+                targets_by_alert[t["sos_alert_id"]].append(t)
+
+            for alert in active_alerts:
+                alert_id = alert["id"]
+                targets = targets_by_alert[alert_id]
                 
-            for alert_id in active_alert_ids:
-                # Get pending targets sorted by priority
-                t2 = time.perf_counter()
-                targets_res = service_client.table("sos_escalation_targets")\
-                    .select("*")\
-                    .eq("sos_alert_id", alert_id)\
-                    .is_("acknowledged_at", "null")\
-                    .order("priority_order")\
-                    .execute()
-                t3 = time.perf_counter()
-                logger.info(f"[TIMING] sos_escalation_targets query for alert {alert_id}: {(t3-t2)*1000:.1f}ms")
-                    
-                targets = targets_res.data or []
                 if not targets:
                     continue
                     
