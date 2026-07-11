@@ -250,10 +250,20 @@ def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user))
                 except Exception as ex:
                     logger.warning(f"Failed to fetch Google route ETA: {ex}")
                     route_status = "api_error"
+
+        if estimated_duration_minutes is None:
+            exp_dur = journey_in.get("expected_duration_minutes")
+            if exp_dur is not None:
+                try:
+                    exp_dur_f = float(exp_dur)
+                    if math.isfinite(exp_dur_f) and exp_dur_f > 0:
+                        estimated_duration_minutes = int(math.ceil(exp_dur_f))
+                except (ValueError, TypeError):
+                    pass
             
         # Resolve trusted place if provided
         trusted_place_id = journey_in.get("trusted_place_id")
-        destination_name = journey_in.get("destination_name") or journey_in.get("destination_address") or journey_in.get("destination") or journey_in.get("to")
+        destination_name = journey_in.get("destination_name") or journey_in.get("destination_label") or journey_in.get("destination_address") or journey_in.get("destination") or journey_in.get("to")
         destination_radius_meters = 100
         notify_guardians_on_arrival = True
 
@@ -275,17 +285,20 @@ def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user))
                 logger.warning(f"Could not resolve trusted_place_id {trusted_place_id}: {tp_err}")
                 trusted_place_id = None
 
+        start_address_val = journey_in.get("start_address") or journey_in.get("start_label") or journey_in.get("from")
+
         journey_data = {
             "user_id": user.id,
             "status": "active",
             "severity": "NORMAL",
+            # safe_windows currently has no journey_name column, so it is intentionally discarded.
             "duration_minutes": duration_minutes_int,
             "duration_seconds": duration_seconds_int,
             "check_in_interval_minutes": check_in_interval_minutes_int,
             "check_in_interval_seconds": check_in_interval_seconds_int,
             "start_latitude": s_lat,
             "start_longitude": s_lng,
-            "start_address": journey_in.get("start_address") or journey_in.get("from"),
+            "start_address": start_address_val,
             "destination_latitude": d_lat,
             "destination_longitude": d_lng,
             "destination_address": journey_in.get("destination_address") or journey_in.get("destination") or journey_in.get("to"),
@@ -309,6 +322,14 @@ def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user))
         }
         # Strip None values so DB defaults apply
         journey_data = {k: v for k, v in journey_data.items() if v is not None}
+
+        print("POST /api/journeys normalized fields:", {
+            "start_address": start_address_val,
+            "destination_name": destination_name,
+            "trusted_place_id": trusted_place_id,
+            "duration_minutes": duration_minutes_int,
+            "check_in_interval_minutes": check_in_interval_minutes_int,
+        })
 
         result = supabase.table("safe_windows").insert(journey_data).execute()
         if not result.data:

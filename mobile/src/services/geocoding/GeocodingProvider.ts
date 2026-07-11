@@ -5,6 +5,7 @@ export interface PlaceResult {
   latitude?: number;
   longitude?: number;
   provider?: string;
+  distanceMeters?: number;
 }
 
 export interface GeocodingProvider {

@@ -35,6 +35,7 @@ export const SafeWindowScreen: React.FC = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const searchTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const searchRequestIdRef = React.useRef<number>(0);
 
   // ── Trusted places state ──────────────────────────────────────────────────
   const [trustedPlaces, setTrustedPlaces] = useState<TrustedPlace[]>([]);
@@ -111,21 +112,67 @@ export const SafeWindowScreen: React.FC = () => {
       setIsSearching(true);
       setErrorBanner(null);
       searchTimeoutRef.current = setTimeout(async () => {
+        const requestId = ++searchRequestIdRef.current;
+        console.log("[SafeWindowSearch] query:", text);
+        console.log("[SafeWindowSearch] request started:", requestId);
+        
         try {
-          let currentLoc;
-          try {
-            const locData = await getCurrentLocationForAlert();
-            if (locData && !locData.permissionDenied) {
-              currentLoc = { latitude: locData.latitude, longitude: locData.longitude };
-            }
-          } catch (e) {}
+          const results = await searchPlaces(text);
           
-          const results = await searchPlaces(text, currentLoc);
-          if (results.length === 0) {
-            setErrorBanner("No locations found.");
+          if (searchRequestIdRef.current !== requestId) {
+            console.log("[SafeWindowSearch] stale response ignored:", requestId);
+            return;
           }
-          setSearchResults(results);
+          
+          console.log("[SafeWindowSearch] raw results count:", results.length);
+          
+          const filtered = results.filter(place => 
+            place.latitude != null && place.longitude != null && 
+            isWithinTamilNadu(place.latitude, place.longitude)
+          );
+          
+          console.log("[SafeWindowSearch] Tamil Nadu filtered count:", filtered.length);
+          
+          let sortedResults = filtered;
+          let refLoc: {latitude: number, longitude: number} | null = null;
+          
+          if (type === 'to') {
+            if (!useCurrentLocation && startPlace && startPlace.latitude && startPlace.longitude) {
+               refLoc = { latitude: startPlace.latitude, longitude: startPlace.longitude };
+            } else if (safeWindow.startLocation) {
+               refLoc = safeWindow.startLocation;
+            }
+          }
+          
+          if (!refLoc) {
+            try {
+              const { Location } = require('expo');
+              const expoLocation = require('expo-location');
+              const lastLoc = await expoLocation.getLastKnownPositionAsync();
+              if (lastLoc) {
+                refLoc = { latitude: lastLoc.coords.latitude, longitude: lastLoc.coords.longitude };
+              }
+            } catch (e) {}
+          }
+          
+          if (refLoc) {
+             console.log("[SafeWindowSearch] sorting using reference location:", refLoc);
+             sortedResults = filtered.map(place => {
+               const dist = distanceBetweenPointsMeters(refLoc!.latitude, refLoc!.longitude, place.latitude!, place.longitude!);
+               return { ...place, distanceMeters: dist };
+             }).sort((a, b) => (a.distanceMeters || 0) - (b.distanceMeters || 0));
+             console.log("[SafeWindowSearch] sorted result order:", sortedResults.map(r => `${r.name} (${Math.round(r.distanceMeters || 0)}m)`).join(', '));
+          } else {
+             console.log("[SafeWindowSearch] reference location unavailable, using default order.");
+          }
+          
+          if (sortedResults.length === 0) {
+            setErrorBanner("No locations found in Tamil Nadu.");
+          }
+          setSearchResults(sortedResults);
         } catch (e: any) {
+          if (searchRequestIdRef.current !== requestId) return;
+          
           if (e.message === "Google Maps API key not configured") {
              if (!isUsingNominatim) {
                  setErrorBanner("Google Maps API key not configured.");
@@ -134,7 +181,9 @@ export const SafeWindowScreen: React.FC = () => {
              setErrorBanner("Location search unavailable.");
           }
         } finally {
-          setIsSearching(false);
+          if (searchRequestIdRef.current === requestId) {
+            setIsSearching(false);
+          }
         }
       }, 1000); // 1-second debounce
     } else {
@@ -144,7 +193,7 @@ export const SafeWindowScreen: React.FC = () => {
   };
 
   const isWithinTamilNadu = (lat: number, lon: number): boolean => {
-    return lat >= 8.0 && lat <= 13.7 && lon >= 76.0 && lon <= 80.5;
+    return lat >= 8.0 && lat <= 13.6 && lon >= 76.0 && lon <= 80.4;
   };
 
   const handleSelectPlace = (place: PlaceResult) => {
@@ -473,12 +522,23 @@ export const SafeWindowScreen: React.FC = () => {
                               }
                             }}
                           />
-                          {isSearching && searchTarget === 'from' && <ActivityIndicator style={{marginTop: 8}} color="#4F46E5" />}
+                          {isSearching && searchTarget === 'from' && (
+                            <View style={{flexDirection: 'row', alignItems: 'center', marginTop: 12, marginLeft: 4}}>
+                              <ActivityIndicator size="small" color="#4F46E5" />
+                              <Text style={{marginLeft: 8, color: '#64748B', fontSize: 14}}>Searching...</Text>
+                            </View>
+                          )}
+                          {!isSearching && searchTarget === 'from' && fromQuery.length > 2 && searchResults.length === 0 && !errorBanner && (
+                             <Text style={{marginTop: 12, marginLeft: 4, color: '#64748B', fontSize: 14}}>No results found.</Text>
+                          )}
                           {searchResults.length > 0 && searchTarget === 'from' && (
                             <View style={styles.resultsContainer}>
                               {searchResults.map(result => (
                                 <TouchableOpacity key={result.id} style={styles.resultItem} onPress={() => handleSelectPlace(result)}>
-                                  <Text style={styles.resultName}>{result.name}</Text>
+                                  <Text style={styles.resultName}>
+                                    {result.name}
+                                    {result.distanceMeters != null ? ` • ${formatDistance(result.distanceMeters)}` : ''}
+                                  </Text>
                                   <Text style={styles.resultDesc}>{result.description}</Text>
                                 </TouchableOpacity>
                               ))}
@@ -571,12 +631,23 @@ export const SafeWindowScreen: React.FC = () => {
                                 else setSearchTarget('to');
                               }}
                             />
-                            {isSearching && searchTarget === 'to' && <ActivityIndicator style={{ marginTop: 8 }} color="#4F46E5" />}
+                            {isSearching && searchTarget === 'to' && (
+                              <View style={{flexDirection: 'row', alignItems: 'center', marginTop: 12, marginLeft: 4}}>
+                                <ActivityIndicator size="small" color="#4F46E5" />
+                                <Text style={{marginLeft: 8, color: '#64748B', fontSize: 14}}>Searching...</Text>
+                              </View>
+                            )}
+                            {!isSearching && searchTarget === 'to' && toQuery.length > 2 && searchResults.length === 0 && !errorBanner && (
+                               <Text style={{marginTop: 12, marginLeft: 4, color: '#64748B', fontSize: 14}}>No results found.</Text>
+                            )}
                             {searchResults.length > 0 && searchTarget === 'to' && (
                               <View style={styles.resultsContainer}>
                                 {searchResults.map(result => (
                                   <TouchableOpacity key={result.id} style={styles.resultItem} onPress={() => handleSelectPlace(result)}>
-                                    <Text style={styles.resultName}>{result.name}</Text>
+                                    <Text style={styles.resultName}>
+                                      {result.name}
+                                      {result.distanceMeters != null ? ` • ${formatDistance(result.distanceMeters)}` : ''}
+                                    </Text>
                                     <Text style={styles.resultDesc}>{result.description}</Text>
                                   </TouchableOpacity>
                                 ))}

@@ -35,6 +35,14 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
     loadCachedContacts();
 
+    supabase.auth.getSession().then(({ data: { session } }) => {
+        setSession(session);
+
+        if (session?.access_token) {
+            fetchContacts(session.access_token);
+        }
+    });
+
     supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session) {
@@ -52,11 +60,13 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const fetchContacts = async (token: string, isRetry = false) => {
+    console.log("fetchContacts() called");
     try {
       const response = await apiClient.get('/api/contacts', {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = response.data;
+      console.log("Returned contacts:", data);
       const mappedContacts: EmergencyContact[] = data.map((item: any) => ({
         id: item.id,
         name: item.name,

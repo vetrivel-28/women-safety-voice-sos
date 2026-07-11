@@ -46,9 +46,7 @@
       [
         "expo-build-properties",
         {
-          "android": {
-            "usesCleartextTraffic": true
-          }
+          "android": {}
         }
       ],
       "expo-secure-store",
@@ -58,7 +56,8 @@
           "icon": "./assets/icon.png",
           "color": "#DC2626"
         }
-      ]
+      ],
+      "@maplibre/maplibre-react-native"
     ]
   }
 }

@@ -90,13 +90,19 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const channelRef = useRef<any>(null);
   const fetchInFlightRef = useRef(false);
 
-  const fetchDashboard = async () => {
+  const fetchDashboard = async (overrideSession?: any) => {
+    console.log("fetchDashboard() called");
     // Prevent concurrent fetches
     if (fetchInFlightRef.current) return;
     fetchInFlightRef.current = true;
     try {
       setLoading(true);
-      const { data: { session } } = await supabase.auth.getSession();
+      let session = overrideSession;
+      if (!session) {
+        const { data } = await supabase.auth.getSession();
+        session = data.session;
+      }
+
       if (!session) {
         clearState();
         return;
@@ -104,6 +110,7 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       // Single backend call gives us: null | {status:'pending',...} | active membership
       const response = await apiClient.get('/api/family/my/current');
+      console.log("Dashboard response:", response.data);
       const payload = response.data;
 
       // ── Case 1: no family, no pending request ──────────────────────────────
@@ -219,11 +226,8 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         clearState();
 
         if (newUserId) {
-          // Small delay so the Supabase client token is propagated before we fetch
-          setTimeout(() => {
-            console.log('[FAMILY CURRENT FETCH] userId =', newUserId);
-            fetchDashboard();
-          }, 300);
+          console.log('[FAMILY CURRENT FETCH] userId =', newUserId);
+          fetchDashboard(session);
         }
       }
     });
