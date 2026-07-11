@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from app.db.client import get_service_role_client
@@ -11,10 +11,16 @@ async def sos_escalation_loop():
     while True:
         try:
             await asyncio.sleep(10)
+            
+            import time
             service_client = get_service_role_client()
             
             # Fetch active alerts
+            t0 = time.perf_counter()
             alerts_res = service_client.table("sos_alerts").select("id").eq("status", "ACTIVE").execute()
+            t1 = time.perf_counter()
+            logger.info(f"[TIMING] sos_alerts query: {(t1-t0)*1000:.1f}ms")
+            
             active_alert_ids = [a["id"] for a in (alerts_res.data or [])]
             
             if not active_alert_ids:
@@ -22,12 +28,15 @@ async def sos_escalation_loop():
                 
             for alert_id in active_alert_ids:
                 # Get pending targets sorted by priority
+                t2 = time.perf_counter()
                 targets_res = service_client.table("sos_escalation_targets")\
                     .select("*")\
                     .eq("sos_alert_id", alert_id)\
                     .is_("acknowledged_at", "null")\
                     .order("priority_order")\
                     .execute()
+                t3 = time.perf_counter()
+                logger.info(f"[TIMING] sos_escalation_targets query for alert {alert_id}: {(t3-t2)*1000:.1f}ms")
                     
                 targets = targets_res.data or []
                 if not targets:
