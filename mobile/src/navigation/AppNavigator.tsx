@@ -32,6 +32,7 @@ import FamilyMembersScreen from '../screens/FamilyMembersScreen';
 import FamilySettingsScreen from '../screens/FamilySettingsScreen';
 import JoinFamilyScreen from '../screens/JoinFamilyScreen';
 import CreateFamilyScreen from '../screens/CreateFamilyScreen';
+import ProfileRepairScreen from '../screens/ProfileRepairScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator();
@@ -75,16 +76,55 @@ function MainTabs() {
 
 export const AppNavigator = () => {
   const [session, setSession] = React.useState<Session | null>(null);
+  const [profileStatus, setProfileStatus] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoading(false);
+    let active = true;
+
+    const checkProfile = async (currentSession: Session) => {
+      try {
+        const { API_BASE_URL } = require('../api/client');
+        const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
+          headers: {
+            'Authorization': `Bearer ${currentSession.access_token}`
+          }
+        });
+        if (res.ok && active) {
+          const data = await res.json();
+          setProfileStatus(data.status); // PROFILE_INCOMPLETE_RETRYABLE or active
+        } else if (active) {
+          setProfileStatus('ERROR');
+        }
+      } catch (e) {
+        console.error(e);
+        if (active) setProfileStatus('ERROR');
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+
+    supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
+      if (active) {
+        setSession(currentSession);
+        if (currentSession) {
+          checkProfile(currentSession);
+        } else {
+          setLoading(false);
+        }
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
+      if (active) {
+        setSession(session);
+        if (session) {
+          setLoading(true);
+          checkProfile(session);
+        } else {
+          setProfileStatus(null);
+        }
+      }
     });
 
     const handleDeepLink = async ({ url }: { url: string }) => {
@@ -125,6 +165,7 @@ export const AppNavigator = () => {
     });
 
     return () => {
+      active = false;
       subscription.unsubscribe();
       urlSubscription.remove();
     };
@@ -136,7 +177,7 @@ export const AppNavigator = () => {
 
   return (
     <Stack.Navigator
-      initialRouteName={session ? "MainTabs" : "Login"}
+      initialRouteName={session ? (profileStatus === 'ACTIVE' ? "MainTabs" : "ProfileRepair") : "Login"}
       screenOptions={{
         headerStyle: {
           backgroundColor: '#FFF7F7',
@@ -152,6 +193,12 @@ export const AppNavigator = () => {
           name="Login" 
           component={LoginScreen} 
           options={{ headerShown: false }} 
+        />
+      ) : profileStatus !== 'ACTIVE' ? (
+        <Stack.Screen 
+          name="ProfileRepair" 
+          component={ProfileRepairScreen} 
+          options={{ headerShown: false, title: 'Setup Required' }} 
         />
       ) : (
         <>
