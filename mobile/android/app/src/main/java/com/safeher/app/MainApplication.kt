@@ -16,10 +16,6 @@ import com.facebook.react.defaults.DefaultReactNativeHost
 import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ReactNativeHostWrapper
 
-object SafeHerAppLifecycle {
-    @Volatile var isActivityResumed = false
-}
-
 class MainApplication : Application(), ReactApplication {
 
   override val reactNativeHost: ReactNativeHost = ReactNativeHostWrapper(
@@ -29,8 +25,6 @@ class MainApplication : Application(), ReactApplication {
             PackageList(this).packages.apply {
               // Packages that cannot be autolinked yet can be added manually here, for example:
               // add(MyReactNativePackage())
-              add(BatteryOptimizationPackage())
-              add(SafeHerAudioPackage())
             }
 
           override fun getJSMainModuleName(): String = ".expo/.virtual-metro-entry"
@@ -53,20 +47,6 @@ class MainApplication : Application(), ReactApplication {
     }
     loadReactNative(this)
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
-
-    registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
-      override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}
-      override fun onActivityStarted(activity: android.app.Activity) {}
-      override fun onActivityResumed(activity: android.app.Activity) {
-          SafeHerAppLifecycle.isActivityResumed = true
-      }
-      override fun onActivityPaused(activity: android.app.Activity) {
-          SafeHerAppLifecycle.isActivityResumed = false
-      }
-      override fun onActivityStopped(activity: android.app.Activity) {}
-      override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) {}
-      override fun onActivityDestroyed(activity: android.app.Activity) {}
-    })
   }
 
   override fun onConfigurationChanged(newConfig: Configuration) {
