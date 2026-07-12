@@ -33,6 +33,7 @@ import FamilySettingsScreen from '../screens/FamilySettingsScreen';
 import JoinFamilyScreen from '../screens/JoinFamilyScreen';
 import CreateFamilyScreen from '../screens/CreateFamilyScreen';
 import ProfileRepairScreen from '../screens/ProfileRepairScreen';
+import LocationPickerScreen from '../screens/LocationPickerScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator();
@@ -228,6 +229,7 @@ export const AppNavigator = () => {
           <Stack.Screen name="FamilySettings" component={FamilySettingsScreen} options={{ title: 'Family Settings' }} />
           <Stack.Screen name="JoinFamily" component={JoinFamilyScreen} options={{ headerShown: false }} />
           <Stack.Screen name="CreateFamily" component={CreateFamilyScreen} options={{ headerShown: false }} />
+          <Stack.Screen name="LocationPicker" component={LocationPickerScreen} options={{ headerShown: false }} />
         </>
       )}
     </Stack.Navigator>

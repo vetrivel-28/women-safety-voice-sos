@@ -40,6 +40,7 @@ interface SafeWindowContextType {
   isStartingJourney: boolean;
   showArrivalModal: boolean;
   closeArrivalModal: () => void;
+  currentLocation: { lat: number; lon: number } | null;
 }
 
 const SafeWindowContext = createContext<SafeWindowContextType | undefined>(undefined);
@@ -65,6 +66,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [isStartingJourney, setIsStartingJourney] = useState(false);
   const [showArrivalModal, setShowArrivalModal] = useState(false);
   const [distanceToDestination, setDistanceToDestination] = useState<number | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lon: number } | null>(null);
 
   const closeArrivalModal = () => setShowArrivalModal(false);
   const { createAlert } = useAlert();
@@ -85,6 +87,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const lastSyncedLocRef = useRef<{ lat: number, lon: number } | null>(null);
   const unsentLocRef = useRef<{ lat: number, lon: number, accuracy?: number, captured_at?: string, provider?: string } | null>(null);
   const isSyncingLocationRef = useRef(false);
+  const arrivalStartTimeRef = useRef<number | null>(null);
 
   // Voice SOS POC 2 State Listener
   useEffect(() => {
@@ -447,6 +450,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     stopBackgroundLocationService();
     stopAudioCapture(); // User deliberately ends journey
     completeInFlightRef.current = false;
+    arrivalStartTimeRef.current = null;
   };
 
   const markCheckInSafe = async () => {
@@ -621,6 +625,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             
             const now = new Date().getTime();
             const currentLoc = { lat: loc.coords.latitude, lon: loc.coords.longitude };
+            setCurrentLocation(currentLoc);
             const capturedAt = new Date(loc.timestamp).toISOString();
 
             // 1. Sync backend tracking (every 20s OR > 25m movement)
@@ -672,7 +677,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               }
             }
 
-            // 2. Distance check (independent of route points)
+            // 2. Distance check and robust arrival detection
             if (safeWindow.destinationLocation && !safeWindow.demoMode &&
               typeof safeWindow.destinationLocation.latitude === 'number' &&
               typeof safeWindow.destinationLocation.longitude === 'number' &&
@@ -680,8 +685,25 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               const destLoc = { lat: safeWindow.destinationLocation.latitude, lon: safeWindow.destinationLocation.longitude };
               const distToDest = distanceBetweenPointsMeters(currentLoc.lat, currentLoc.lon, destLoc.lat, destLoc.lon);
               setDistanceToDestination(distToDest);
+
+              // Robust Arrival Detection: Distance < 50m, Speed < 2 m/s
+              const speed = loc.coords.speed || 0;
+              if (distToDest < 50 && speed < 2) {
+                if (!arrivalStartTimeRef.current) {
+                  arrivalStartTimeRef.current = now;
+                } else if (now - arrivalStartTimeRef.current >= 10000) {
+                  // Reached destination for 10 seconds -> Complete Journey
+                  console.log(`[SafeWindowContext] Robust arrival detected. Completing journey...`);
+                  endSafeWindow();
+                  setShowArrivalModal(true);
+                  arrivalStartTimeRef.current = null;
+                }
+              } else {
+                arrivalStartTimeRef.current = null;
+              }
             } else {
               setDistanceToDestination(null);
+              arrivalStartTimeRef.current = null;
             }
 
             // 3. Route deviation check
@@ -789,7 +811,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       checkAndPromptBatteryExemption,
       isStartingJourney,
       showArrivalModal,
-      closeArrivalModal
+      closeArrivalModal,
+      currentLocation
     }}>
       {children}
     </SafeWindowContext.Provider>

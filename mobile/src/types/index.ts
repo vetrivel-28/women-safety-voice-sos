@@ -5,7 +5,7 @@ export type RootStackParamList = {
   SOS: undefined;
   SilentSOS: undefined;
   Contacts: undefined;
-  SafeWindow: undefined;
+  SafeWindow: { pickedLocation?: { type: 'from' | 'to'; latitude: number; longitude: number; address: string } } | undefined;
   DeadManCheckIn: undefined;
   AlertHistory: undefined;
   Settings: undefined;
@@ -19,6 +19,8 @@ export type RootStackParamList = {
   FamilySettings: undefined;
   JoinFamily: undefined;
   CreateFamily: undefined;
+  ProfileRepair: undefined;
+  LocationPicker: { type: 'from' | 'to'; initialLocation?: { latitude: number; longitude: number } };
 };
 
 export type AlertStatus = 'ACTIVE' | 'CANCELLED' | 'SILENT_DURESS_ACTIVE' | 'RESOLVED';
