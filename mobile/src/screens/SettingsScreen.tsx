@@ -5,10 +5,12 @@ import { supabase } from '../lib/supabaseClient';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SectionHeader } from '../components/SectionHeader';
 import { useContacts } from '../context/ContactsContext';
+import { useMapProvider } from '../context/MapContext';
 
 
 import { API_BASE_URL, apiClient } from '../api/client';
 export const SettingsScreen: React.FC = () => {
+  const { mapStyleId, setMapStyleId } = useMapProvider();
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [session, setSession] = useState<any>(null);
 
@@ -259,6 +261,36 @@ export const SettingsScreen: React.FC = () => {
               <Text style={styles.toggleDesc}>Voice activation</Text>
             </View>
             <Switch value={false} disabled={true} />
+          </View>
+        </View>
+
+        <SectionHeader title="Map Preferences" />
+        <View style={styles.card}>
+          <View style={styles.toggleRow}>
+            <View style={{flex: 1}}>
+              <Text style={styles.toggleTitle}>Map Style</Text>
+              <Text style={styles.toggleDesc}>Select the visual style for MapLibre.</Text>
+            </View>
+            <View style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+              <TouchableOpacity
+                style={[
+                  { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, minWidth: 140, alignItems: 'center' },
+                  mapStyleId === 'OPENFREEMAP_LIBERTY' ? { backgroundColor: '#EEF2FF', borderColor: '#4F46E5' } : { borderColor: '#E2E8F0' }
+                ]}
+                onPress={() => setMapStyleId('OPENFREEMAP_LIBERTY')}
+              >
+                <Text style={[{ fontSize: 13, fontWeight: '600' }, mapStyleId === 'OPENFREEMAP_LIBERTY' ? { color: '#4F46E5' } : { color: '#64748B' }]}>Current Style</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, minWidth: 140, alignItems: 'center' },
+                  mapStyleId === 'MAPTILER_STREETS' ? { backgroundColor: '#EEF2FF', borderColor: '#4F46E5' } : { borderColor: '#E2E8F0' }
+                ]}
+                onPress={() => setMapStyleId('MAPTILER_STREETS')}
+              >
+                <Text style={[{ fontSize: 13, fontWeight: '600' }, mapStyleId === 'MAPTILER_STREETS' ? { color: '#4F46E5' } : { color: '#64748B' }]}>MapTiler Streets</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
 

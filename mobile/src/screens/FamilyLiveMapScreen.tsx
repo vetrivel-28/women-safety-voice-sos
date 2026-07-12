@@ -12,51 +12,14 @@ import BottomSheet, { BottomSheetFlatList } from '@gorhom/bottom-sheet';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import SOSSafetyModal from '../components/SOSSafetyModal';
 import { NearbyRespondersList } from '../components/NearbyRespondersList';
+import MapRenderer from '../components/map/MapRenderer';
 
 // Debug logs for APK gating issue
 console.log('[MAP RUNTIME] appOwnership =', Constants.appOwnership);
 console.log('[MAP RUNTIME] executionEnvironment =', Constants.executionEnvironment);
 console.log('[PHASE4 BUILD MARKER] phase4-final-startup-v2-mapfix');
 
-// Dynamic import for MapLibre to avoid Expo Go crash
-const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
-console.log('[MAP RUNTIME] isExpoGo =', isExpoGo);
-
-let MapLibreGL: any = null;
-let mapLibreLoaded = false;
-let mapLibreLoadError: any = null;
-
-if (!isExpoGo) {
-  try {
-    const mapLibreModule = require('@maplibre/maplibre-react-native');
-    const resolvedMapLibre = mapLibreModule.default ?? mapLibreModule;
-
-    const hasMap = !!resolvedMapLibre?.MapView || !!resolvedMapLibre?.Map;
-    const hasCamera = !!resolvedMapLibre?.Camera;
-    const hasMarker = !!resolvedMapLibre?.PointAnnotation || !!resolvedMapLibre?.Marker;
-
-    MapLibreGL = resolvedMapLibre;
-    mapLibreLoaded = hasMap && hasCamera;
-
-    console.log('[MAP RUNTIME] full module keys =', Object.keys(mapLibreModule));
-    console.log('[MAP RUNTIME] mapLibre has default =', !!mapLibreModule.default);
-    console.log('[MAP RUNTIME] mapLibre has MapView =', !!resolvedMapLibre?.MapView);
-    console.log('[MAP RUNTIME] mapLibre has Map =', !!resolvedMapLibre?.Map);
-    console.log('[MAP RUNTIME] mapLibre has Camera =', hasCamera);
-    console.log('[MAP RUNTIME] mapLibre has PointAnnotation =', !!resolvedMapLibre?.PointAnnotation);
-    console.log('[MAP RUNTIME] mapLibre has Marker =', !!resolvedMapLibre?.Marker);
-    console.log('[MAP RUNTIME] mapLibre component naming =', resolvedMapLibre?.MapView ? 'MapView/PointAnnotation' : 'Map/Marker');
-    console.log('[MAP RUNTIME] mapLibre load strategy =', mapLibreModule.default ? 'default' : 'module');
-    console.log('[MAP RUNTIME] mapLibreLoaded =', mapLibreLoaded);
-  } catch (err: any) {
-    mapLibreLoadError = err;
-    mapLibreLoaded = false;
-    console.log('[MAP RUNTIME] mapLibreLoaded =', false);
-    console.log('[MAP RUNTIME] mapLibre error =', err?.message ?? String(err));
-  }
-}
-
-const getStatusColor = (status: string, isStale?: boolean) => {
+export const getStatusColor = (status: string, isStale?: boolean) => {
   if (isStale) return '#94A3B8';
   switch (status) {
     case 'SOS_ACTIVE':
@@ -339,12 +302,6 @@ export default function FamilyLiveMapScreen() {
     }
   };
 
-  // Memoized marker component for performance
-  const MarkerComponent = useMemo(() => {
-    if (!mapLibreLoaded || !MapLibreGL) return null;
-    return MapLibreGL.Marker;
-  }, [mapLibreLoaded]);
-
   // Handle member tap - center map on their location
   const handleMemberTap = useCallback((member: FamilyMemberLocation) => {
     if (member.latitude && member.longitude && mapRef.current) {
@@ -411,7 +368,6 @@ export default function FamilyLiveMapScreen() {
     );
   }
 
-  console.log('[MAP RUNTIME] shouldShowNativeMap =', !!MapLibreGL);
 
   return (
     <GestureHandlerRootView style={styles.container}>
@@ -428,71 +384,24 @@ export default function FamilyLiveMapScreen() {
             <Text style={styles.errorText}>{errorMsg}</Text>
             <Text style={styles.retryText} onPress={fetchLocations}>Tap to retry</Text>
           </View>
-        ) : mapLibreLoaded ? (() => {
-          try {
-            const plottableLocs = locations.filter(l => l.has_location && l.sharing_enabled && l.latitude != null && l.longitude != null);
-            
-            if (plottableLocs.length === 0) {
-              return (
-                <View style={styles.mapFallback}>
-                  <Text style={styles.fallbackText}>No family members are currently sharing their location.</Text>
-                  <Text style={styles.fallbackSubtext}>Enable location sharing to see the map.</Text>
-                </View>
-              );
-            }
-            
-            const myLoc = plottableLocs.find(l => l.user_id === myUserId);
-            const centerLoc = myLoc || plottableLocs[0];
-            const centerCoordinate = centerLoc ? [centerLoc.longitude!, centerLoc.latitude!] : [77.0272806, 11.0283256];
-            
-            const MapComponent = MapLibreGL.Map;
-            const CameraComponent = MapLibreGL.Camera;
-            const MarkerComp = MapLibreGL.Marker;
-            
-            return (
-              <MapComponent
-                ref={mapRef}
-                style={StyleSheet.absoluteFillObject}
-                mapStyle="https://tiles.openfreemap.org/styles/liberty"
-                logo={false}
-                attribution={true}
-                attributionPosition={{ bottom: 8, right: 8 }}
-              >
-                <CameraComponent
-                  zoom={mapZoom}
-                  center={centerCoordinate}
-                  duration={0}
-                />
-                {plottableLocs.map(loc => (
-                  <MarkerComp
-                    key={loc.user_id}
-                    id={`family-marker-${loc.user_id}`}
-                    lngLat={[loc.longitude!, loc.latitude!]}
-                    anchor="center"
-                  >
-                    <View style={[styles.markerView, { backgroundColor: getStatusColor(loc.status, loc.is_stale) }]}>
-                      <View style={styles.markerInnerDot} />
-                    </View>
-                  </MarkerComp>
-                ))}
-              </MapComponent>
-            );
-          } catch (renderError: any) {
-            console.log('[MAP RENDER ERROR]', renderError?.message);
-            return (
-              <View style={styles.mapFallback}>
-                <Text style={styles.fallbackText}>Map is temporarily unavailable.</Text>
-              </View>
-            );
-          }
-        })() : (
-          <View style={styles.mapFallback}>
-            <Text style={styles.fallbackText}>Map is temporarily unavailable.</Text>
-          </View>
-        )}
+        ) : (() => {
+          const plottableLocs = locations.filter(l => l.has_location && l.sharing_enabled && l.latitude != null && l.longitude != null);
+          const myLoc = plottableLocs.find(l => l.user_id === myUserId);
+          const centerLoc = myLoc || plottableLocs[0];
+          const centerCoordinate: [number, number] = centerLoc ? [centerLoc.longitude!, centerLoc.latitude!] : [77.0272806, 11.0283256];
+          
+          return (
+            <MapRenderer
+              locations={locations}
+              myUserId={myUserId}
+              mapZoom={mapZoom}
+              centerCoordinate={centerCoordinate}
+            />
+          );
+        })()}
 
         {/* Zoom controls */}
-        {mapLibreLoaded && locations.some(l => l.has_location && l.sharing_enabled) && (
+        {locations.some(l => l.has_location && l.sharing_enabled) && (
           <View style={styles.zoomControls}>
             <TouchableOpacity style={styles.zoomButton} onPress={() => setMapZoom(z => Math.min(19, z + 1))}>
               <Text style={styles.zoomButtonText}>+</Text>
@@ -505,9 +414,9 @@ export default function FamilyLiveMapScreen() {
         )}
 
         {/* OSM Attribution */}
-        {mapLibreLoaded && (
+        {locations.some(l => l.has_location && l.sharing_enabled) && (
           <View style={styles.osmAttribution}>
-            <Text style={styles.osmText}>© OpenStreetMap contributors</Text>
+            <Text style={styles.osmText}>© OpenStreetMap / Google contributors</Text>
           </View>
         )}
       </View>

@@ -7,6 +7,7 @@ import { ContactsProvider } from './src/context/ContactsContext';
 import { SafeWindowProvider } from './src/context/SafeWindowContext';
 import { NotificationProvider } from './src/context/NotificationContext';
 import { FamilyProvider } from './src/context/FamilyContext';
+import { MapProvider } from './src/context/MapContext';
 import { RingProvider } from './src/hardware/RingContext';
 import { useRingSOS } from './src/hardware/useRing';
 
@@ -18,21 +19,23 @@ function HardwareRingController() {
 
 export default function App() {
   return (
-    <RingProvider>
-      <AlertProvider>
-        <ContactsProvider>
-          <SafeWindowProvider>
-            <NotificationProvider>
-              <FamilyProvider>
-                <NavigationContainer ref={navigationRef}>
-                  <HardwareRingController />
-                  <AppNavigator />
-                </NavigationContainer>
-              </FamilyProvider>
-            </NotificationProvider>
-          </SafeWindowProvider>
-        </ContactsProvider>
-      </AlertProvider>
-    </RingProvider>
+    <MapProvider>
+      <RingProvider>
+        <AlertProvider>
+          <ContactsProvider>
+            <SafeWindowProvider>
+              <NotificationProvider>
+                <FamilyProvider>
+                  <NavigationContainer ref={navigationRef}>
+                    <HardwareRingController />
+                    <AppNavigator />
+                  </NavigationContainer>
+                </FamilyProvider>
+              </NotificationProvider>
+            </SafeWindowProvider>
+          </ContactsProvider>
+        </AlertProvider>
+      </RingProvider>
+    </MapProvider>
   );
 }
