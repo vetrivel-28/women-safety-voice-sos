@@ -77,9 +77,9 @@ export default function MapLibreRenderer({
       attributionPosition={{ bottom: 8, right: 8 }}
     >
       <CameraComponent
-        zoom={mapZoom}
-        center={centerCoordinate}
-        duration={0}
+        zoomLevel={mapZoom}
+        centerCoordinate={centerCoordinate}
+        animationDuration={0}
       />
       {plottableLocs.map(loc => (
         <MarkerComp

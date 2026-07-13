@@ -68,6 +68,11 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [distanceToDestination, setDistanceToDestination] = useState<number | null>(null);
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lon: number } | null>(null);
 
+  const safeWindowRef = useRef<SafeWindowState>(initialState);
+  useEffect(() => {
+    safeWindowRef.current = safeWindow;
+  }, [safeWindow]);
+
   const closeArrivalModal = () => setShowArrivalModal(false);
   const { createAlert } = useAlert();
   const { getPrimaryContact } = useContacts();
@@ -586,21 +591,39 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   useEffect(() => {
     let timerInterval: NodeJS.Timeout;
-    let locationSubscription: Location.LocationSubscription | null = null;
-    let watchPromise: Promise<Location.LocationSubscription> | null = null;
-    let isMounted = true;
-
     const checkTimers = () => {
-      if (safeWindow.status !== 'ACTIVE') return;
+      const currentSafeWindow = safeWindowRef.current;
+      if (currentSafeWindow.status !== 'ACTIVE') return;
       const now = new Date().getTime();
 
       // Missed check-in
-      if (safeWindow.checkInDueAt && now >= new Date(safeWindow.checkInDueAt).getTime()) {
+      if (currentSafeWindow.checkInDueAt && now >= new Date(currentSafeWindow.checkInDueAt).getTime()) {
         markMissedCheckIn();
-      } else if (safeWindow.endsAt && now >= new Date(safeWindow.endsAt).getTime()) {
+      } else if (currentSafeWindow.endsAt && now >= new Date(currentSafeWindow.endsAt).getTime()) {
         endSafeWindow();
       }
     };
+
+    if (safeWindow.status === 'ACTIVE') {
+      timerInterval = setInterval(checkTimers, 1000);
+    }
+    
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active' && safeWindow.status === 'ACTIVE') {
+        checkTimers();
+      }
+    });
+
+    return () => {
+      if (timerInterval) clearInterval(timerInterval);
+      subscription.remove();
+    };
+  }, [safeWindow.status]);
+
+  useEffect(() => {
+    let locationSubscription: Location.LocationSubscription | null = null;
+    let watchPromise: Promise<Location.LocationSubscription> | null = null;
+    let isMounted = true;
 
     const startLocationWatcher = async () => {
       try {
@@ -620,7 +643,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             distanceInterval: 10,
           },
           async (loc) => {
-            if (!isMounted || safeWindow.status !== 'ACTIVE') return;
+            const currentSafeWindow = safeWindowRef.current;
+            if (!isMounted || currentSafeWindow.status !== 'ACTIVE') return;
             console.log(`[SafeWindowContext] Watcher received location: lat=${loc.coords.latitude}, lon=${loc.coords.longitude}, accuracy=${loc.coords.accuracy}`);
             
             const now = new Date().getTime();
@@ -629,7 +653,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             const capturedAt = new Date(loc.timestamp).toISOString();
 
             // 1. Sync backend tracking (every 20s OR > 25m movement)
-            if (safeWindow.journeyId && !isSyncingLocationRef.current) {
+            if (currentSafeWindow.journeyId && !isSyncingLocationRef.current) {
               const timeSinceSync = now - lastBackendSyncRef.current;
               let shouldSync = false;
 
@@ -661,7 +685,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
                 try {
                   console.log(`[SafeWindowContext] Syncing location to backend... Payload:`, payload);
-                  await apiClient.patch(`/api/journeys/${safeWindow.journeyId}/location`, payload);
+                  await apiClient.patch(`/api/journeys/${currentSafeWindow.journeyId}/location`, payload);
                   console.log(`[SafeWindowContext] Backend location sync successful.`);
                   lastBackendSyncRef.current = now;
                   lastSyncedLocRef.current = currentLoc;
@@ -678,11 +702,11 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             }
 
             // 2. Distance check and robust arrival detection
-            if (safeWindow.destinationLocation && !safeWindow.demoMode &&
-              typeof safeWindow.destinationLocation.latitude === 'number' &&
-              typeof safeWindow.destinationLocation.longitude === 'number' &&
+            if (currentSafeWindow.destinationLocation && !currentSafeWindow.demoMode &&
+              typeof currentSafeWindow.destinationLocation.latitude === 'number' &&
+              typeof currentSafeWindow.destinationLocation.longitude === 'number' &&
               typeof currentLoc.lat === 'number' && typeof currentLoc.lon === 'number') {
-              const destLoc = { lat: safeWindow.destinationLocation.latitude, lon: safeWindow.destinationLocation.longitude };
+              const destLoc = { lat: currentSafeWindow.destinationLocation.latitude, lon: currentSafeWindow.destinationLocation.longitude };
               const distToDest = distanceBetweenPointsMeters(currentLoc.lat, currentLoc.lon, destLoc.lat, destLoc.lon);
               setDistanceToDestination(distToDest);
 
@@ -707,8 +731,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             }
 
             // 3. Route deviation check
-            if (safeWindow.routePoints && safeWindow.routePoints.length > 2 && safeWindow.destinationLocation && !safeWindow.routeDeviationDetected && !safeWindow.demoMode) {
-              if (isRouteDeviation(currentLoc, safeWindow.routePoints!, 300)) {
+            if (currentSafeWindow.routePoints && currentSafeWindow.routePoints.length > 2 && currentSafeWindow.destinationLocation && !currentSafeWindow.routeDeviationDetected && !currentSafeWindow.demoMode) {
+              if (isRouteDeviation(currentLoc, currentSafeWindow.routePoints!, 300)) {
                 setSafeWindow(prev => {
                   if (prev.routeDeviationDetected) return prev;
                   if (!prev.routeDeviationWarningAt) {
@@ -739,7 +763,6 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         
         locationSubscription = await watchPromise;
         
-        // If the component unmounted while we were awaiting the promise
         if (!isMounted && locationSubscription) {
           console.log("[SafeWindowContext] Stopping delayed location watcher.");
           locationSubscription.remove();
@@ -752,19 +775,11 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
 
     if (safeWindow.status === 'ACTIVE') {
-      timerInterval = setInterval(checkTimers, 1000);
       startLocationWatcher();
     }
 
-    const subscription = AppState.addEventListener('change', nextAppState => {
-      if (nextAppState === 'active' && safeWindow.status === 'ACTIVE') {
-        checkTimers();
-      }
-    });
-
     return () => {
       isMounted = false;
-      if (timerInterval) clearInterval(timerInterval);
       if (locationSubscription) {
         console.log("[SafeWindowContext] Stopping location watcher.");
         locationSubscription.remove();
@@ -772,9 +787,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         console.log("[SafeWindowContext] Resolving pending watcher for cleanup.");
         watchPromise.then(sub => sub.remove()).catch(() => {});
       }
-      subscription.remove();
     };
-  }, [safeWindow.status, safeWindow.endsAt, safeWindow.checkInDueAt, safeWindow.routePoints, safeWindow.routeDeviationDetected, safeWindow.routeDeviationWarningAt, safeWindow.demoMode]);
+  }, [safeWindow.status]);
 
   const getRemainingSeconds = () => {
     if (safeWindow.status === 'INACTIVE' || safeWindow.status === 'COMPLETED' || safeWindow.status === 'MISSED_CHECKIN') return 0;

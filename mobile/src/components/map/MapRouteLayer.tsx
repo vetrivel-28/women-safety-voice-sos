@@ -27,7 +27,13 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
   const { mapStyleId } = useMapProvider();
 
   const routeGeoJSON = useMemo(() => {
-    if (!routePoints || routePoints.length === 0) return null;
+    if (!routePoints || routePoints.length < 2) return null;
+    
+    // Check if all points are identical (crashes MapLibre)
+    const first = routePoints[0];
+    const hasDifferentPoint = routePoints.some(p => p.lat !== first.lat || p.lon !== first.lon);
+    if (!hasDifferentPoint) return null;
+
     return {
       type: 'FeatureCollection',
       features: [
@@ -47,10 +53,19 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
     if (routePoints && routePoints.length > 0) {
       const lats = routePoints.map(p => p.lat);
       const lons = routePoints.map(p => p.lon);
-      return {
-        ne: [Math.max(...lons), Math.max(...lats)],
-        sw: [Math.min(...lons), Math.min(...lats)]
-      };
+      const maxLat = Math.max(...lats);
+      const minLat = Math.min(...lats);
+      const maxLon = Math.max(...lons);
+      const minLon = Math.min(...lons);
+      
+      // MapLibre Camera bounds crash if ne === sw (zero area)
+      if (maxLat === minLat && maxLon === minLon) {
+        return {
+          ne: [maxLon + 0.01, maxLat + 0.01],
+          sw: [minLon - 0.01, minLat - 0.01]
+        };
+      }
+      return { ne: [maxLon, maxLat], sw: [minLon, minLat] };
     }
     if (currentLocation) {
       return {
@@ -82,17 +97,25 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
       logoEnabled={false}
       attributionEnabled={false}
     >
-      <CameraComponent
-        bounds={bounds ? {
-          ne: bounds.ne,
-          sw: bounds.sw,
-          paddingLeft: 40,
-          paddingRight: 40,
-          paddingTop: 40,
-          paddingBottom: 250 // Leave space for bottom card
-        } : undefined}
-        animationDuration={1000}
-      />
+      {bounds ? (
+        <CameraComponent
+          bounds={{
+            ne: bounds.ne,
+            sw: bounds.sw,
+            paddingLeft: 40,
+            paddingRight: 40,
+            paddingTop: 40,
+            paddingBottom: 250 // Leave space for bottom card
+          }}
+          animationDuration={1000}
+        />
+      ) : (
+        <CameraComponent
+          centerCoordinate={currentLocation ? [currentLocation.lon, currentLocation.lat] : [77.0272806, 11.0283256]}
+          zoomLevel={currentLocation ? 15 : 6}
+          animationDuration={1000}
+        />
+      )}
 
       {routeGeoJSON && (
         <ShapeSource id="routeSource" shape={routeGeoJSON}>

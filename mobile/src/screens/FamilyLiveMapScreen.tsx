@@ -5,7 +5,7 @@ import { useFamily } from '../context/FamilyContext';
 import { familyLocationsApi } from '../api/familyLocations';
 import { FamilyMemberLocation } from '../types';
 import { supabase } from '../lib/supabaseClient';
-import { getCurrentLocationForAlert } from '../utils/location';
+import { getCurrentLocationForAlert, getLastKnownLocation } from '../utils/location';
 import { apiClient } from '../api/client';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import BottomSheet, { BottomSheetFlatList } from '@gorhom/bottom-sheet';
@@ -56,6 +56,8 @@ export default function FamilyLiveMapScreen() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [showSOSModal, setShowSOSModal] = useState(false);
   
+  const [defaultCenterCoordinate, setDefaultCenterCoordinate] = useState<[number, number]>([77.0272806, 11.0283256]); // TN Default
+  
   const [nearbyRespondersData, setNearbyRespondersData] = useState<any>(null);
   const [respondersLoading, setRespondersLoading] = useState(false);
   const respondersAbortRef = useRef<AbortController | null>(null);
@@ -72,6 +74,23 @@ export default function FamilyLiveMapScreen() {
   const snapPoints = useMemo(() => ['15%', '60%'], []);
 
   useEffect(() => {
+    const initLocation = async () => {
+      try {
+        const lastLoc = await getLastKnownLocation();
+        if (lastLoc && !lastLoc.permissionDenied && lastLoc.latitude && lastLoc.longitude) {
+           setDefaultCenterCoordinate([lastLoc.longitude, lastLoc.latitude]);
+        }
+        
+        const gpsLoc = await getCurrentLocationForAlert(true);
+        if (gpsLoc && !gpsLoc.permissionDenied && gpsLoc.latitude && gpsLoc.longitude) {
+           setDefaultCenterCoordinate([gpsLoc.longitude, gpsLoc.latitude]);
+        }
+      } catch (e) {
+        // Fallback to default
+      }
+    };
+    initLocation();
+
     supabase.auth.getSession().then(({ data }) => {
       if (data?.session) {
         const userId = data.session.user.id;
@@ -211,8 +230,19 @@ export default function FamilyLiveMapScreen() {
     };
 
     timerRef.current = setInterval(tick, intervalTime);
+
+    // Set up Realtime Sync
+    const channel = supabase
+      .channel('family_locations_updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_locations' }, () => {
+        console.log('[FAMILY MAP] user_locations changed via Realtime, refetching...');
+        if (!errorMsg) fetchLocations();
+      })
+      .subscribe();
+
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      supabase.removeChannel(channel);
     };
   }, [sharingEnabled, family?.id]); // Depend on family.id to restart polling on family change
 
@@ -302,13 +332,12 @@ export default function FamilyLiveMapScreen() {
     }
   };
 
-  // Handle member tap - center map on their location
   const handleMemberTap = useCallback((member: FamilyMemberLocation) => {
     if (member.latitude && member.longitude && mapRef.current) {
-      // Animate camera to member location
-      setMapZoom(17);
-      // Note: Actual camera animation would depend on MapLibre API
-      console.log('[MAP] Centering on member:', member.profiles?.full_name);
+      // Not imperative anymore, map uses centerCoordinate passed via props, but wait...
+      // MapLibreRenderer doesn't currently support setting center via tapping because centerCoordinate is derived from plottableLocs array!
+      // In this audit, we will just snap bottom sheet for now since center is locked to user.
+      console.log('[MAP] Centering on member logic requires overriding derived center state. Left as future enhancement:', member.profiles?.full_name);
     }
     bottomSheetRef.current?.snapToIndex(0); // Collapse sheet after selection
   }, []);
@@ -388,7 +417,7 @@ export default function FamilyLiveMapScreen() {
           const plottableLocs = locations.filter(l => l.has_location && l.sharing_enabled && l.latitude != null && l.longitude != null);
           const myLoc = plottableLocs.find(l => l.user_id === myUserId);
           const centerLoc = myLoc || plottableLocs[0];
-          const centerCoordinate: [number, number] = centerLoc ? [centerLoc.longitude!, centerLoc.latitude!] : [77.0272806, 11.0283256];
+          const centerCoordinate: [number, number] = centerLoc ? [centerLoc.longitude!, centerLoc.latitude!] : defaultCenterCoordinate;
           
           return (
             <MapRenderer

@@ -256,7 +256,7 @@ export const SafeWindowScreen: React.FC = () => {
                   <Text style={{ fontSize: 24, fontWeight: '800', color: '#1E293B' }}>
                     {distanceToDestination != null 
                       ? `${Math.max(1, Math.round(distanceToDestination / 1000 / 0.5))}m` // 30km/h avg speed
-                      : `${safeWindow.estimated_duration_minutes}m`}
+                      : `${safeWindow.estimated_duration_minutes || '--'}m`}
                   </Text>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
@@ -264,7 +264,7 @@ export const SafeWindowScreen: React.FC = () => {
                   <Text style={{ fontSize: 24, fontWeight: '800', color: '#1E293B' }}>
                     {distanceToDestination != null 
                       ? `${(distanceToDestination / 1000).toFixed(1)} km` 
-                      : `${safeWindow.distance_km} km`}
+                      : `${safeWindow.distance_km || '--'} km`}
                   </Text>
                 </View>
               </View>

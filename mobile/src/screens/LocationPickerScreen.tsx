@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, TextInput, Platform, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, TextInput, Platform } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types';
 import { useMapProvider } from '../context/MapContext';
 import { getMapStyleUrl } from '../config/MapConfig';
-import { reverseGeocode, searchPlaces, PlaceResult } from '../services/geocodingService';
+import { reverseGeocode, searchPlaces, geocodePlace, PlaceResult } from '../services/geocodingService';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { getCurrentLocationForAlert } from '../utils/location';
+import { getCurrentLocationForAlert, getLastKnownLocation } from '../utils/location';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
@@ -27,8 +28,10 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
   const { type, initialLocation } = route.params;
   const { mapStyleId } = useMapProvider();
   
-  const [centerCoord, setCenterCoord] = useState<[number, number]>(
-    initialLocation ? [initialLocation.longitude, initialLocation.latitude] : [80.2707, 13.0827] // Default Chennai
+  const [centerCoord, setCenterCoord] = useState<[number, number] | null>(
+    initialLocation && initialLocation.longitude && initialLocation.latitude
+      ? [initialLocation.longitude, initialLocation.latitude]
+      : null
   );
   
   const [address, setAddress] = useState<string>('Loading address...');
@@ -43,14 +46,35 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    if (!initialLocation) {
-      // Try to get current location
-      getCurrentLocationForAlert(true).then(loc => {
-        if (loc && !loc.permissionDenied) {
-          setCenterCoord([loc.longitude, loc.latitude]);
-          updateAddress(loc.latitude, loc.longitude);
+    if (!initialLocation || !initialLocation.latitude || !initialLocation.longitude) {
+      // Hierarchy: Last Known -> Current GPS -> Default (Chennai)
+      const fetchBestLocation = async () => {
+        let bestCoords: [number, number] = [80.2707, 13.0827]; // Fallback Default
+        
+        try {
+          const lastLoc = await getLastKnownLocation();
+          if (lastLoc && !lastLoc.permissionDenied && lastLoc.latitude && lastLoc.longitude) {
+            bestCoords = [lastLoc.longitude, lastLoc.latitude];
+            setCenterCoord(bestCoords);
+          }
+          
+          const gpsLoc = await getCurrentLocationForAlert(true);
+          if (gpsLoc && !gpsLoc.permissionDenied && gpsLoc.latitude && gpsLoc.longitude) {
+            bestCoords = [gpsLoc.longitude, gpsLoc.latitude];
+            setCenterCoord(bestCoords);
+            updateAddress(gpsLoc.latitude, gpsLoc.longitude);
+          } else {
+            // If GPS fails, still try to update address with whatever we have
+            setCenterCoord(bestCoords);
+            updateAddress(bestCoords[1], bestCoords[0]);
+          }
+        } catch (e) {
+          setCenterCoord(bestCoords);
+          updateAddress(bestCoords[1], bestCoords[0]);
         }
-      });
+      };
+      
+      fetchBestLocation();
     } else {
       updateAddress(initialLocation.latitude, initialLocation.longitude);
     }
@@ -72,7 +96,7 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
   };
 
   const onRegionDidChange = async (event: any) => {
-    // MapLibre onRegionDidChange returns event.geometry.coordinates -> [lon, lat]
+    // MapLibre onRegionDidChange payload -> event.geometry.coordinates -> [lon, lat]
     if (event && event.geometry && event.geometry.coordinates) {
       const coords = event.geometry.coordinates;
       setCenterCoord(coords as [number, number]);
@@ -101,24 +125,33 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
     }
   };
 
-  const handleSelectPlace = (place: PlaceResult) => {
-    if (place.latitude && place.longitude) {
-      const coords: [number, number] = [place.longitude, place.latitude];
+  const handleSelectPlace = async (place: PlaceResult) => {
+    let lat = place.latitude;
+    let lon = place.longitude;
+
+    if (!lat || !lon) {
+      setIsFetchingAddress(true);
+      const coords = await geocodePlace(place.id);
+      if (coords) {
+        lat = coords.latitude;
+        lon = coords.longitude;
+      }
+      setIsFetchingAddress(false);
+    }
+
+    if (lat && lon) {
+      const coords: [number, number] = [lon, lat];
       setCenterCoord(coords);
       setAddress(place.name);
-      if (cameraRef.current) {
-        cameraRef.current.setCamera({
-          centerCoordinate: coords,
-          zoomLevel: 15,
-          animationDuration: 1000
-        });
-      }
       setSearchQuery('');
       setSearchResults([]);
+    } else {
+      setAddress("Could not find coordinates for this location");
     }
   };
 
   const handleConfirm = () => {
+    if (!centerCoord) return;
     navigation.navigate({
       name: 'SafeWindow',
       params: {
@@ -176,21 +209,23 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
       )}
 
       <View style={styles.mapContainer}>
-        <MapComponent
-          ref={mapRef}
-          style={StyleSheet.absoluteFillObject}
-          mapStyle={getMapStyleUrl(mapStyleId)}
-          logoEnabled={false}
-          onRegionDidChange={onRegionDidChange}
-        >
-          <CameraComponent
-            ref={cameraRef}
-            zoomLevel={15}
-            centerCoordinate={centerCoord}
-            animationMode="flyTo"
-            animationDuration={0}
-          />
-        </MapComponent>
+        {centerCoord && (
+          <MapComponent
+            ref={mapRef}
+            style={StyleSheet.absoluteFillObject}
+            mapStyle={getMapStyleUrl(mapStyleId)}
+            logoEnabled={false}
+            onRegionDidChange={onRegionDidChange}
+          >
+            <CameraComponent
+              ref={cameraRef}
+              centerCoordinate={centerCoord}
+              zoomLevel={15}
+              animationDuration={1000}
+              animationMode="flyTo"
+            />
+          </MapComponent>
+        )}
 
         {/* Center Pin Overlay */}
         <View style={styles.centerPinContainer} pointerEvents="none">
