@@ -628,8 +628,13 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const startLocationWatcher = async () => {
       try {
         console.log("[SafeWindowContext] Requesting foreground permissions for watcher...");
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
+        let fgStatus = (await Location.getForegroundPermissionsAsync()).status;
+        if (fgStatus !== 'granted') {
+          const req = await Location.requestForegroundPermissionsAsync();
+          fgStatus = req.status;
+        }
+
+        if (fgStatus !== 'granted') {
           console.warn("[SafeWindowContext] Location permissions not granted for watcher.");
           return;
         }

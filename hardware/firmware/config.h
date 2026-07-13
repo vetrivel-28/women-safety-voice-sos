@@ -3,7 +3,7 @@
 
 // Pin Definitions for ESP32-C3 Super Mini
 #define PIN_LED 8        // Internal LED is usually on GPIO 8 for ESP32-C3
-#define PIN_BUTTON 9     // External Push Button connected to GPIO 9
+#define PIN_BUTTON 9      // External Push Button connected to GPIO 9
 #define PIN_VIBRATION 10 // Base of 2N2222A connected to GPIO 10 via 1k resistor
 
 // BLE Configuration

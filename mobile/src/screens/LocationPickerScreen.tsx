@@ -219,10 +219,10 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
           >
             <CameraComponent
               ref={cameraRef}
-              centerCoordinate={centerCoord}
-              zoomLevel={15}
-              animationDuration={1000}
-              animationMode="flyTo"
+              center={centerCoord}
+              zoom={15}
+              duration={1000}
+              easing="fly"
             />
           </MapComponent>
         )}

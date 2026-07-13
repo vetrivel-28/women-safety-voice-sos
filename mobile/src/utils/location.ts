@@ -10,9 +10,13 @@ export async function getCurrentLocationForAlert(fastMode?: boolean): Promise<{
   mapLink: string;
 } | null> {
   try {
-    const { status } = await Location.requestForegroundPermissionsAsync();
+    let fgStatus = (await Location.getForegroundPermissionsAsync()).status;
+    if (fgStatus !== 'granted') {
+      const req = await Location.requestForegroundPermissionsAsync();
+      fgStatus = req.status;
+    }
     
-    if (status !== 'granted') {
+    if (fgStatus !== 'granted') {
       return {
         latitude: 0,
         longitude: 0,
@@ -62,6 +66,51 @@ export async function getCurrentLocationForAlert(fastMode?: boolean): Promise<{
     if (!bestLocation) {
       return null;
     }
+
+    return {
+      latitude: bestLocation.coords.latitude,
+      longitude: bestLocation.coords.longitude,
+      accuracy: bestLocation.coords.accuracy || 9999,
+      captured_at: new Date().toISOString(),
+      provider: "expo-location",
+      permissionDenied: false,
+      mapLink: `https://www.google.com/maps?q=${bestLocation.coords.latitude},${bestLocation.coords.longitude}`
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+export async function getLastKnownLocation(): Promise<{
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  captured_at: string;
+  provider: string;
+  permissionDenied: boolean;
+  mapLink: string;
+} | null> {
+  try {
+    let fgStatus = (await Location.getForegroundPermissionsAsync()).status;
+    if (fgStatus !== 'granted') {
+      const req = await Location.requestForegroundPermissionsAsync();
+      fgStatus = req.status;
+    }
+    
+    if (fgStatus !== 'granted') {
+      return {
+        latitude: 0,
+        longitude: 0,
+        accuracy: 9999,
+        captured_at: new Date().toISOString(),
+        provider: "expo-location",
+        permissionDenied: true,
+        mapLink: ''
+      };
+    }
+
+    const bestLocation = await Location.getLastKnownPositionAsync();
+    if (!bestLocation) return null;
 
     return {
       latitude: bestLocation.coords.latitude,

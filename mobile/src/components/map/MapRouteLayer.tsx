@@ -97,23 +97,27 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
       logoEnabled={false}
       attributionEnabled={false}
     >
-      {bounds ? (
+      {bounds && Array.isArray(bounds.ne) && Array.isArray(bounds.sw) && bounds.ne.length === 2 && bounds.sw.length === 2 ? (
         <CameraComponent
-          bounds={{
-            ne: bounds.ne,
-            sw: bounds.sw,
-            paddingLeft: 40,
-            paddingRight: 40,
-            paddingTop: 40,
-            paddingBottom: 250 // Leave space for bottom card
+          bounds={[
+            bounds.sw[0], // west
+            bounds.sw[1], // south
+            bounds.ne[0], // east
+            bounds.ne[1], // north
+          ]}
+          padding={{
+            left: 40,
+            right: 40,
+            top: 40,
+            bottom: 250 // Leave space for bottom card
           }}
-          animationDuration={1000}
+          duration={1000}
         />
       ) : (
         <CameraComponent
-          centerCoordinate={currentLocation ? [currentLocation.lon, currentLocation.lat] : [77.0272806, 11.0283256]}
-          zoomLevel={currentLocation ? 15 : 6}
-          animationDuration={1000}
+          center={currentLocation ? [currentLocation.lon, currentLocation.lat] : [77.0272806, 11.0283256]}
+          zoom={currentLocation ? 15 : 6}
+          duration={1000}
         />
       )}
 
