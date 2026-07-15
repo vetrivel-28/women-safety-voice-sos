@@ -29,7 +29,7 @@ if (!isExpoGo) {
     MapLibreGL.setAccessToken(null);
     MapLibreGL.setTelemetryEnabled(false);
   } catch (e) {
-    console.warn('MapLibreGL not available in this environment');
+    console.warn('MapLibreGL initialization failed:', e instanceof Error ? e.message : String(e));
   }
 }
 
