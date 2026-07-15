@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { apiClient } from '../api/client';
+import { startLocationSharing, stopLocationSharing, getLocationSharingStatus } from '../modules/LocationSharingModule';
 
 export interface Family {
   id: string;
@@ -55,6 +56,8 @@ interface FamilyContextData {
   removeMember: (memberId: string) => Promise<void>;
   leaveFamily: () => Promise<void>;
   regeneratePin: () => Promise<void>;
+  isSharingEnabled: boolean | null;
+  toggleLocationSharing: (val: boolean) => Promise<void>;
 }
 
 const FamilyContext = createContext<FamilyContextData>({
@@ -74,6 +77,8 @@ const FamilyContext = createContext<FamilyContextData>({
   removeMember: async () => {},
   leaveFamily: async () => {},
   regeneratePin: async () => {},
+  isSharingEnabled: null,
+  toggleLocationSharing: async () => {},
 });
 
 export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -85,6 +90,7 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [activeSOS, setActiveSOS] = useState<any[]>([]);
   const [activeJourneys, setActiveJourneys] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isSharingEnabled, setIsSharingEnabled] = useState<boolean | null>(null);
 
   const currentFamilyIdRef = useRef<string | null>(null);
   const channelRef = useRef<any>(null);
@@ -93,8 +99,8 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const fetchDashboard = async (overrideSession?: any) => {
     console.log("fetchDashboard() called");
     // Prevent concurrent fetches
-    if (fetchInFlightRef.current) return;
-    fetchInFlightRef.current = true;
+    if (fetchInFlightRef.current) { console.log("[RACE DEBUG] fetchDashboard ignored because fetchInFlightRef is true! caller context needed"); return; }
+    console.log("[RACE DEBUG] fetchInFlightRef set to TRUE"); fetchInFlightRef.current = true;
     try {
       setLoading(true);
       let session = overrideSession;
@@ -162,6 +168,8 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setActiveJourneys(dashResponse.data.active_journeys || []);
       setMembers(membersResponse.data || []);
 
+      hydrateLocationSharing(session, fam.id);
+
       // If host, fetch pending join requests from backend (no direct Supabase needed)
       if (fam.host_user_id === session.user.id) {
         try {
@@ -182,7 +190,7 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     } finally {
       setLoading(false);
-      fetchInFlightRef.current = false;
+      console.log("[RACE DEBUG] fetchInFlightRef set to FALSE"); fetchInFlightRef.current = false;
     }
   };
 
@@ -196,7 +204,54 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setActiveJourneys([]);
     currentFamilyIdRef.current = null;
     setLoading(false);
-    fetchInFlightRef.current = false;
+    setIsSharingEnabled(false);
+    console.log("[RACE DEBUG] fetchInFlightRef set to FALSE"); fetchInFlightRef.current = false;
+  };
+
+  const hydrateLocationSharing = async (session: any, famId: string | null) => {
+    if (!session || !session.user || !famId) {
+      if (isSharingEnabled !== false) setIsSharingEnabled(false);
+      return;
+    }
+    const userId = session.user.id;
+    try {
+      const nativeStatus = await getLocationSharingStatus();
+      
+      let backendSharingEnabled = false;
+      try {
+         const locResponse = await apiClient.get(`/api/family/${famId}/locations`);
+         const myLoc = locResponse.data.find((l: any) => l.user_id === userId);
+         if (myLoc) {
+            backendSharingEnabled = myLoc.sharing_enabled;
+         }
+      } catch(e) {
+         console.warn("[FamilyContext] Failed to fetch backend location preference", e);
+         backendSharingEnabled = nativeStatus.preferenceEnabled;
+      }
+      
+      if (nativeStatus.storedUserId && nativeStatus.storedUserId !== userId) {
+         console.log("[LocationSharing] Account switched! Stopping previous user's sharing");
+         await stopLocationSharing();
+         setIsSharingEnabled(false);
+         return;
+      }
+
+      if (backendSharingEnabled && !nativeStatus.serviceRunning) {
+         console.log("[LocationSharing] Backend says true, but service is stopped. Restarting...");
+         const apiUrl = apiClient.defaults.baseURL || 'https://women-safety-voice-sos.onrender.com';
+         await startLocationSharing(session.access_token, apiUrl, userId);
+         setIsSharingEnabled(true);
+      }
+      else if (!backendSharingEnabled && nativeStatus.serviceRunning) {
+         console.log("[LocationSharing] Backend says false, but service is running. Stopping...");
+         await stopLocationSharing();
+         setIsSharingEnabled(false);
+      } else {
+         setIsSharingEnabled(backendSharingEnabled);
+      }
+    } catch(e) {
+      console.warn("[LocationSharing] Error hydrating", e);
+    }
   };
 
   // Track current authenticated user to detect account switches
@@ -305,6 +360,26 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     await fetchDashboard();
   };
 
+  const toggleLocationSharing = async (val: boolean) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session || !family) return;
+
+    setIsSharingEnabled(val);
+
+    try {
+      if (val) {
+        const apiUrl = apiClient.defaults.baseURL || 'https://women-safety-voice-sos.onrender.com';
+        await startLocationSharing(session.access_token, apiUrl, session.user.id);
+      } else {
+        await stopLocationSharing();
+      }
+      await apiClient.patch('/api/family/me/location-sharing', { sharing_enabled: val });
+    } catch (e) {
+      console.error("[LocationSharing] toggle error", e);
+      setIsSharingEnabled(!val);
+    }
+  };
+
   return (
     <FamilyContext.Provider value={{
       family,
@@ -323,6 +398,8 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       removeMember,
       leaveFamily,
       regeneratePin,
+      isSharingEnabled,
+      toggleLocationSharing,
     }}>
       {children}
     </FamilyContext.Provider>
