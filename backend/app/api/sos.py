@@ -17,51 +17,8 @@ def create_sos_alert(alert_in: AlertCreate, background_tasks: BackgroundTasks, a
     logger.info(f"Creating SOS alert for user_id: {user.id} with trigger_type: {alert_in.trigger_type}")
 
     service_client = get_service_role_client()
-    
-    # Upsert profile to prevent FK constraint failure.
-    # Fetch first to preserve existing guardian_code (column is NOT NULL).
-    try:
-        import re as _re
-        import random as _random
-        existing_profile = service_client.table("profiles").select("id, guardian_code").eq("id", user.id).execute()
-        
-        if not existing_profile.data:
-            # Generate a valid 6-digit code for new profile
-            for _ in range(50):
-                candidate = f"{_random.randint(0, 999999):06d}"
-                collision = service_client.table("profiles").select("id").eq("guardian_code", candidate).neq("id", user.id).execute()
-                if not collision.data:
-                    new_code = candidate
-                    break
-            else:
-                new_code = f"{_random.randint(0, 999999):06d}"
-            
-            service_client.table("profiles").insert({
-                "id": user.id,
-                "email": user.email or "",
-                "full_name": "",
-                "guardian_code": new_code,
-            }).execute()
-        else:
-            existing_code = (existing_profile.data[0] or {}).get("guardian_code", "")
-            if not existing_code or not _re.match(r'^[0-9]{6}$', str(existing_code)):
-                # Fix invalid code inline
-                for _ in range(50):
-                    candidate = f"{_random.randint(0, 999999):06d}"
-                    collision = service_client.table("profiles").select("id").eq("guardian_code", candidate).neq("id", user.id).execute()
-                    if not collision.data:
-                        new_code = candidate
-                        break
-                else:
-                    new_code = f"{_random.randint(0, 999999):06d}"
-                service_client.table("profiles").update({"guardian_code": new_code}).eq("id", user.id).execute()
-        logger.info(f"Ensured profile exists for user {user.id}")
-    except httpx.TimeoutException:
-        raise
-    except httpx.RequestError:
-        raise
-    except Exception as e:
-        logger.warning(f"Profile ensure failed (non-fatal): {e}")
+    # Profile existence is no longer enforced in the emergency path.
+    # SOS alerts depend on auth.users(id) which is guaranteed to exist.
 
     raw_trigger = alert_in.trigger_type.value if hasattr(alert_in.trigger_type, 'value') else str(alert_in.trigger_type)
     norm_trigger = raw_trigger

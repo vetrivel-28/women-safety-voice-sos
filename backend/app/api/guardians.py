@@ -33,17 +33,8 @@ def get_my_guardian_code(auth_data: dict = Depends(get_current_user)):
     try:
         res = service_client.table("profiles").select("guardian_code, id, email, full_name").eq("id", user.id).execute()
 
-        # If no profile exists, create a minimal one so we can save the code
         if not res.data:
-            service_client.table("profiles").upsert({
-                "id": user.id,
-                "email": user.email or "",
-                "full_name": "",
-            }).execute()
-            res = service_client.table("profiles").select("guardian_code, id, email, full_name").eq("id", user.id).execute()
-
-        if not res.data:
-            raise HTTPException(status_code=500, detail="Could not find or create profile")
+            raise HTTPException(status_code=400, detail="PROFILE_INCOMPLETE")
 
         profile = res.data[0]
         current_code = profile.get("guardian_code") or ""
