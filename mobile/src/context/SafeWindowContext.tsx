@@ -322,9 +322,45 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   };
 
   const startSafeWindow = async (durationMinutes: SafeWindowDuration, checkInMinutes: number, startLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }, destLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }, trustedPlace?: TrustedPlace | null) => {
-    if (startInFlightRef.current || completeInFlightRef.current || safeWindow.status === 'ACTIVE') {
+    // Fast path: in-flight guard cannot be self-healed — bail immediately.
+    if (startInFlightRef.current || completeInFlightRef.current) {
       throw new Error("Action currently in flight or another journey is already active.");
     }
+
+    // If client state says ACTIVE, verify with the backend before blocking.
+    // This self-heals the case where the app was killed mid-journey and
+    // restoreJourney ran into a stale/orphaned local state.
+    if (safeWindow.status === 'ACTIVE') {
+      try {
+        const verifyResp = await apiClient.get('/api/journeys');
+        const serverActive = Array.isArray(verifyResp.data)
+          ? verifyResp.data.find((j: any) => j.status === 'active')
+          : null;
+
+        if (!serverActive) {
+          // Backend has no active journey — client state is stale. Clear it and proceed.
+          console.warn('[SafeWindow] Client thought journey was ACTIVE but backend has none. Clearing stale state.');
+          setSafeWindow(initialState);
+          startInFlightRef.current = false;
+          completeInFlightRef.current = false;
+          missedTriggeredRef.current = false;
+          stopAudioCapture();
+          // Fall through — do NOT return; we want to start a new journey below.
+        } else {
+          // Backend confirms an active journey genuinely exists — block correctly.
+          throw new Error("Action currently in flight or another journey is already active.");
+        }
+      } catch (verifyErr: any) {
+        // If the verify call itself fails (network error, 401), preserve the
+        // existing behaviour and block rather than risk double-starting.
+        if (verifyErr.message?.includes('already active') || verifyErr.message?.includes('in flight')) {
+          throw verifyErr;
+        }
+        // Network/auth failure during verify — block conservatively.
+        throw new Error("Action currently in flight or another journey is already active.");
+      }
+    }
+
     startInFlightRef.current = true;
     setIsStartingJourney(true);
     missedAlertCreated.current = false;
