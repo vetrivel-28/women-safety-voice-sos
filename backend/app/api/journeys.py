@@ -427,7 +427,28 @@ def complete_journey(journey_id: str, auth_data: dict = Depends(get_current_user
         completed_journey = result.data[0]
         logger.info(f"[TRUSTED PLACE UPDATE] journey_completed journeyId = {journey_id}")
         logger.info(f"[TRUSTED PLACE UPDATE] completed_reason = {completed_reason}")
-        
+
+        # ── Best-effort final stats ──────────────────────────────────────────
+        # Compute distance, duration, and average speed from the breadcrumb trail
+        # and persist back to safe_windows. Non-fatal on any failure.
+        try:
+            stats = _compute_journey_stats(supabase, journey_id, completed_journey)
+            if stats:
+                supabase.table("safe_windows").update({
+                    "final_distance_m": stats["total_distance_m"],
+                    "final_duration_seconds": stats["duration_seconds"],
+                    "avg_speed_kmh": stats["avg_speed_kmh"],
+                }).eq("id", journey_id).execute()
+                # Reflect stats in the return value without a second DB round-trip
+                completed_journey = {**completed_journey, **{
+                    "final_distance_m": stats["total_distance_m"],
+                    "final_duration_seconds": stats["duration_seconds"],
+                    "avg_speed_kmh": stats["avg_speed_kmh"],
+                }}
+                logger.info(f"[JOURNEY STATS] persisted for {journey_id}: {stats}")
+        except Exception as stats_err:
+            logger.warning(f"[JOURNEY STATS] non-fatal stats computation failed for {journey_id}: {stats_err}")
+
         # Verify family status after completion
         try:
             from app.api.family_locations import _resolve_member_status
@@ -731,26 +752,68 @@ def handle_missed_checkin(journey_id: str, auth_data: dict = Depends(get_current
 @router.patch("/{journey_id}/location", response_model=JourneyResponse)
 @router.post("/{journey_id}/location", response_model=JourneyResponse)
 def update_location(journey_id: str, location_in: dict, auth_data: dict = Depends(get_current_user)):
+    """
+    Update the ward's current position during an active journey.
+
+    Backward-compatible: response shape is unchanged (JourneyResponse from safe_windows).
+    New behavior (v2): also inserts a breadcrumb row into journey_location_updates.
+    The breadcrumb insert is best-effort — a failure there is logged but does NOT
+    fail the overall request or change the HTTP response shape in any way.
+    """
     user = auth_data["user"]
     supabase = get_service_role_client()
 
     try:
-        from datetime import datetime
+        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        lat = location_in.get("latitude") or location_in.get("current_latitude")
+        lng = location_in.get("longitude") or location_in.get("current_longitude")
+
         update_data = {
-            "current_latitude": location_in.get("latitude") or location_in.get("current_latitude"),
-            "current_longitude": location_in.get("longitude") or location_in.get("current_longitude"),
+            "current_latitude": lat,
+            "current_longitude": lng,
             "current_address": location_in.get("address") or location_in.get("current_address"),
             "location_accuracy": location_in.get("accuracy"),
             "location_provider": location_in.get("provider"),
-            "last_location_at": location_in.get("captured_at") or datetime.utcnow().isoformat()
+            "last_location_at": location_in.get("captured_at") or now_iso,
         }
-        
-        # Remove None values
+
+        # Remove None values so DB defaults are preserved
         update_data = {k: v for k, v in update_data.items() if v is not None}
-        
+
         result = supabase.table("safe_windows").update(update_data).eq("id", journey_id).eq("user_id", user.id).execute()
         if not result.data:
             raise HTTPException(status_code=404, detail="Journey not found")
+
+        # ── Best-effort breadcrumb insert ────────────────────────────────────
+        # Failures here are intentionally non-fatal: the primary location update
+        # on safe_windows already succeeded.  The guardian live map falls back to
+        # a 2-minute HTTP reconciliation poll, so occasional missed breadcrumbs
+        # do not leave the guardian with a permanently broken polyline.
+        if lat is not None and lng is not None:
+            try:
+                breadcrumb = {
+                    "journey_id": journey_id,
+                    "user_id": user.id,
+                    "lat": float(lat),
+                    "lng": float(lng),
+                    "recorded_at": location_in.get("captured_at") or now_iso,
+                }
+                # Optional fields — only include when provided by the mobile client
+                if location_in.get("heading") is not None:
+                    breadcrumb["heading"] = float(location_in["heading"])
+                if location_in.get("speed_ms") is not None:
+                    breadcrumb["speed_ms"] = float(location_in["speed_ms"])
+                if location_in.get("accuracy") is not None:
+                    breadcrumb["accuracy"] = float(location_in["accuracy"])
+
+                supabase.table("journey_location_updates").insert(breadcrumb).execute()
+            except Exception as breadcrumb_err:
+                # Non-fatal: log and continue — does NOT affect the HTTP response
+                logger.warning(
+                    f"[breadcrumb] non-fatal insert failure for journey {journey_id}: {breadcrumb_err}"
+                )
+
         return result.data[0]
     except HTTPException:
         raise
@@ -955,3 +1018,208 @@ def escalation_check(journey_id: str, auth_data: dict = Depends(get_current_user
     except Exception as e:
         logger.error(f"escalation_check failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Escalation check failed")
+
+
+# ── Shared helper: compute stats from breadcrumb trail ───────────────────────
+
+def _compute_journey_stats(service_client, journey_id: str, journey_row: dict) -> Optional[Dict]:
+    """
+    Compute final journey statistics from journey_location_updates breadcrumbs.
+    Returns None if fewer than 2 breadcrumb points exist (can't compute distance).
+    Uses Haversine formula consistent with geoUtils.ts on the mobile side.
+    Non-fatal callers should wrap this in try/except.
+    """
+    import math
+
+    rows = (
+        service_client.table("journey_location_updates")
+        .select("lat,lng,recorded_at")
+        .eq("journey_id", journey_id)
+        .order("recorded_at", desc=False)
+        .execute()
+    )
+
+    points = rows.data or []
+    if len(points) < 2:
+        return None
+
+    def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        R = 6371000.0
+        p1, p2 = math.radians(lat1), math.radians(lat2)
+        dp = math.radians(lat2 - lat1)
+        dl = math.radians(lon2 - lon1)
+        a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    total_m = 0.0
+    for i in range(1, len(points)):
+        try:
+            total_m += haversine_m(
+                float(points[i - 1]["lat"]), float(points[i - 1]["lng"]),
+                float(points[i]["lat"]),     float(points[i]["lng"]),
+            )
+        except (TypeError, ValueError):
+            pass
+
+    # Wall-clock duration from first to last breadcrumb
+    try:
+        t_start = datetime.fromisoformat(str(points[0]["recorded_at"]).replace("Z", "+00:00"))
+        t_end   = datetime.fromisoformat(str(points[-1]["recorded_at"]).replace("Z", "+00:00"))
+        duration_secs = max(0, int((t_end - t_start).total_seconds()))
+    except Exception:
+        # Fall back to journey started_at / completed_at if breadcrumb timestamps are missing
+        try:
+            t_start = parse_utc(journey_row.get("started_at"))
+            t_end   = parse_utc(journey_row.get("completed_at") or datetime.now(timezone.utc).isoformat())
+            duration_secs = max(0, int((t_end - t_start).total_seconds()))
+        except Exception:
+            duration_secs = 0
+
+    avg_speed_kmh: Optional[float] = None
+    if duration_secs > 0:
+        avg_speed_kmh = round((total_m / 1000.0) / (duration_secs / 3600.0), 2)
+
+    return {
+        "total_distance_m": round(total_m, 1),
+        "duration_seconds": duration_secs,
+        "avg_speed_kmh": avg_speed_kmh,
+        "point_count": len(points),
+    }
+
+
+# ── GET /{journey_id}/locations — breadcrumb trail ───────────────────────────
+
+@router.get("/{journey_id}/locations")
+def get_journey_locations(
+    journey_id: str,
+    limit: int = 200,
+    auth_data: dict = Depends(get_current_user),
+):
+    """
+    Returns the ordered breadcrumb trail for a journey.
+
+    Access: the ward who owns the journey OR an active guardian of that ward.
+    Cap: max 500 rows (sufficient for the current 60-minute max journey duration
+         at the 8s/15m throttle — ~450 rows worst-case). Ordered ASC by recorded_at
+         so the guardian live map can build the polyline in arrival order.
+    """
+    user = auth_data["user"]
+    service_client = get_service_role_client()
+
+    # Hard cap: never return more than 500 rows regardless of caller's limit param
+    effective_limit = min(max(1, limit), 500)
+
+    try:
+        # Verify the journey exists and caller is authorized
+        journey_res = service_client.table("safe_windows").select("user_id").eq("id", journey_id).execute()
+        if not journey_res.data:
+            raise HTTPException(status_code=404, detail="Journey not found")
+
+        ward_id = journey_res.data[0]["user_id"]
+
+        if ward_id != user.id:
+            # Check active guardian link
+            link = service_client.table("guardian_links").select("id") \
+                .eq("guardian_user_id", user.id).eq("user_id", ward_id).eq("status", "ACTIVE").execute()
+            if not link.data:
+                raise HTTPException(status_code=403, detail="Not authorized to view this journey")
+
+        rows = (
+            service_client.table("journey_location_updates")
+            .select("id,lat,lng,heading,speed_ms,accuracy,recorded_at")
+            .eq("journey_id", journey_id)
+            .order("recorded_at", desc=False)
+            .limit(effective_limit)
+            .execute()
+        )
+
+        return rows.data or []
+
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
+    except Exception as e:
+        logger.error(f"get_journey_locations failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not fetch journey locations")
+
+
+# ── GET /{journey_id}/stats — final journey statistics ───────────────────────
+
+@router.get("/{journey_id}/stats")
+def get_journey_stats(
+    journey_id: str,
+    auth_data: dict = Depends(get_current_user),
+):
+    """
+    Returns computed journey statistics.
+
+    For completed journeys: returns the persisted final_distance_m / final_duration_seconds
+    / avg_speed_kmh from safe_windows (written by POST /complete).
+    For active journeys: computes live from the breadcrumb trail on demand.
+
+    Access: ward or active guardian.
+    """
+    user = auth_data["user"]
+    service_client = get_service_role_client()
+
+    try:
+        journey_res = service_client.table("safe_windows").select("*").eq("id", journey_id).execute()
+        if not journey_res.data:
+            raise HTTPException(status_code=404, detail="Journey not found")
+
+        journey = journey_res.data[0]
+        ward_id = journey["user_id"]
+
+        if ward_id != user.id:
+            link = service_client.table("guardian_links").select("id") \
+                .eq("guardian_user_id", user.id).eq("user_id", ward_id).eq("status", "ACTIVE").execute()
+            if not link.data:
+                raise HTTPException(status_code=403, detail="Not authorized")
+
+        # For completed journeys, return cached stats if available
+        if journey.get("status") == "completed" and journey.get("final_distance_m") is not None:
+            return {
+                "journey_id": journey_id,
+                "total_distance_m": journey["final_distance_m"],
+                "duration_seconds": journey.get("final_duration_seconds"),
+                "avg_speed_kmh": journey.get("avg_speed_kmh"),
+                "point_count": None,  # not cached; call /locations for count
+                "started_at": journey.get("started_at"),
+                "ended_at": journey.get("completed_at"),
+                "source": "cached",
+            }
+
+        # Otherwise compute live from breadcrumb trail
+        stats = _compute_journey_stats(service_client, journey_id, journey)
+        if not stats:
+            return {
+                "journey_id": journey_id,
+                "total_distance_m": 0.0,
+                "duration_seconds": 0,
+                "avg_speed_kmh": None,
+                "point_count": 0,
+                "started_at": journey.get("started_at"),
+                "ended_at": journey.get("completed_at"),
+                "source": "insufficient_data",
+            }
+
+        return {
+            "journey_id": journey_id,
+            **stats,
+            "started_at": journey.get("started_at"),
+            "ended_at": journey.get("completed_at"),
+            "source": "live",
+        }
+
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise
+    except httpx.RequestError:
+        raise
+    except Exception as e:
+        logger.error(f"get_journey_stats failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not compute journey stats")
