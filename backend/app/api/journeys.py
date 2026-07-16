@@ -87,7 +87,6 @@ class JourneyCreate(BaseModel):
     destination_address: Optional[str] = None
     destination: Optional[str] = None
     expected_duration_minutes: Optional[int] = None
-    journey_name: Optional[str] = "Safe Journey"
 
     class Config:
         extra = "allow"
@@ -291,7 +290,6 @@ def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user))
             "user_id": user.id,
             "status": "active",
             "severity": "NORMAL",
-            # safe_windows currently has no journey_name column, so it is intentionally discarded.
             "duration_minutes": duration_minutes_int,
             "duration_seconds": duration_seconds_int,
             "check_in_interval_minutes": check_in_interval_minutes_int,

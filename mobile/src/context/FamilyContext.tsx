@@ -306,6 +306,8 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         .on('postgres_changes', { event: '*', schema: 'public', table: 'sos_alerts' }, fetchDashboard)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'safe_windows' }, fetchDashboard)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'families' }, fetchDashboard)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'family_member_locations' }, fetchDashboard)
+        .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'family_member_locations' }, fetchDashboard)
         .subscribe();
     };
 
