@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, Switch, Alert, ActivityIndicator, TouchableOpacity, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Switch, Alert, ActivityIndicator, TouchableOpacity, Pressable, LayoutAnimation } from 'react-native';
 import { StatusBar } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFamily } from '../context/FamilyContext';
 import { familyLocationsApi } from '../api/familyLocations';
 import { FamilyMemberLocation } from '../types';
@@ -12,12 +13,27 @@ import BottomSheet, { BottomSheetFlatList } from '@gorhom/bottom-sheet';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import SOSSafetyModal from '../components/SOSSafetyModal';
 import { NearbyRespondersList } from '../components/NearbyRespondersList';
-import MapRenderer from '../components/map/MapRenderer';
+import { useMapProvider } from '../context/MapContext';
+import { getMapStyleUrl } from '../config/MapConfig';
 
 // Debug logs for APK gating issue
 console.log('[MAP RUNTIME] appOwnership =', Constants.appOwnership);
 console.log('[MAP RUNTIME] executionEnvironment =', Constants.executionEnvironment);
 console.log('[PHASE4 BUILD MARKER] phase4-final-startup-v2-mapfix');
+
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+
+const SHARING_PREF_KEY = '@safeher_location_sharing_enabled';
+
+let MapLibreGL: any = null;
+if (!isExpoGo) {
+  try {
+    const mapLibreModule = require('@maplibre/maplibre-react-native');
+    MapLibreGL = mapLibreModule.default ?? mapLibreModule;
+  } catch (e) {
+    console.warn('MapLibreGL initialization failed:', e instanceof Error ? e.message : String(e));
+  }
+}
 
 export const getStatusColor = (status: string, isStale?: boolean) => {
   if (isStale) return '#94A3B8';
@@ -49,6 +65,7 @@ export default function FamilyLiveMapScreen() {
   const [locations, setLocations] = useState<FamilyMemberLocation[]>([]);
   const [mapZoom, setMapZoom] = useState(17);
   const [sharingEnabled, setSharingEnabled] = useState(false);
+  const { mapStyleId } = useMapProvider();
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [myUserId, setMyUserId] = useState<string | null>(null);
@@ -62,13 +79,17 @@ export default function FamilyLiveMapScreen() {
   const [respondersLoading, setRespondersLoading] = useState(false);
   const respondersAbortRef = useRef<AbortController | null>(null);
 
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
   const currentUserIdRef = useRef<string | null>(null);
   const currentFamilyIdRef = useRef<string | null>(null);
   const fetchInFlightRef = useRef(false);
   const safetySummaryAbortRef = useRef<AbortController | null>(null);
   const bottomSheetRef = useRef<BottomSheet>(null);
   const mapRef = useRef<any>(null);
+  // Tracks the timestamp of the last explicit user toggle so we can discard
+  // any in-flight fetch response that started before the toggle.
+  const toggleTimestampRef = useRef<number>(0);
+  // Stable camera position: set once on mount, only updated on explicit user action.
+  const cameraPositionRef = useRef<{ center: [number, number]; zoom: number } | null>(null);
 
   // Bottom sheet snap points: collapsed (15%), expanded (60%)
   const snapPoints = useMemo(() => ['15%', '60%'], []);
@@ -76,14 +97,27 @@ export default function FamilyLiveMapScreen() {
   useEffect(() => {
     const initLocation = async () => {
       try {
+        // Load persisted sharing preference as optimistic default while the
+        // server fetch is in flight.
+        const stored = await AsyncStorage.getItem(SHARING_PREF_KEY);
+        if (stored === 'true') setSharingEnabled(true);
+
         const lastLoc = await getLastKnownLocation();
         if (lastLoc && !lastLoc.permissionDenied && lastLoc.latitude && lastLoc.longitude) {
-           setDefaultCenterCoordinate([lastLoc.longitude, lastLoc.latitude]);
+          const center: [number, number] = [lastLoc.longitude, lastLoc.latitude];
+          setDefaultCenterCoordinate(center);
+          if (!cameraPositionRef.current) {
+            cameraPositionRef.current = { center, zoom: 17 };
+          }
         }
         
         const gpsLoc = await getCurrentLocationForAlert(true);
         if (gpsLoc && !gpsLoc.permissionDenied && gpsLoc.latitude && gpsLoc.longitude) {
-           setDefaultCenterCoordinate([gpsLoc.longitude, gpsLoc.latitude]);
+          const center: [number, number] = [gpsLoc.longitude, gpsLoc.latitude];
+          setDefaultCenterCoordinate(center);
+          if (!cameraPositionRef.current) {
+            cameraPositionRef.current = { center, zoom: 17 };
+          }
         }
       } catch (e) {
         // Fallback to default
@@ -146,15 +180,22 @@ export default function FamilyLiveMapScreen() {
       }
 
       if (family) {
-        fetchLocations();
+        fetchLocations(myUserId);
       }
     }
   }, [family]);
 
   useEffect(() => {
     if (myUserId && locations.length > 0) {
-       const myLoc = locations.find(l => l.user_id === myUserId);
-       if (myLoc) setSharingEnabled(myLoc.sharing_enabled);
+      const myLoc = locations.find(l => l.user_id === myUserId);
+      if (myLoc) {
+        // Only follow the server value if this fetch started before the last
+        // explicit toggle. If the user toggled after the fetch started, their
+        // intent wins over the stale response.
+        const fetchAge = (locations as any).__fetchStartTime ?? 0;
+        if (fetchAge < toggleTimestampRef.current) return;
+        setSharingEnabled(myLoc.sharing_enabled);
+      }
     }
   }, [locations, myUserId]);
 
@@ -217,40 +258,111 @@ export default function FamilyLiveMapScreen() {
 
   useEffect(() => {
     if (!family) return;
-    
-    const intervalTime = 30000;
-    
-    const tick = async () => {
-      if (errorMsg) return; // Back off polling on errors
-      await fetchLocations();
-      await fetchNearbyResponders();
-      if (sharingEnabled && !errorMsg) {
-        await updateMyLocation();
-      }
-    };
 
-    timerRef.current = setInterval(tick, intervalTime);
-
-    // Set up Realtime Sync
+    // Set up Realtime Sync with race-condition fix
     const channel = supabase
       .channel('family_locations_updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_locations' }, () => {
-        console.log('[FAMILY MAP] user_locations changed via Realtime, refetching...');
-        if (!errorMsg) fetchLocations();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'family_member_locations', filter: `family_id=eq.${family.id}` }, (payload) => {
+        console.log('[FAMILY MAP] family_member_locations changed via Realtime:', payload.eventType);
+        
+        let needsFetch = false;
+        setLocations(currentLocations => {
+          const newRow = payload.new as any;
+          if (payload.eventType === 'UPDATE' && newRow?.user_id) {
+             const exists = currentLocations.some(l => l.user_id === newRow.user_id);
+             if (exists) {
+                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                return currentLocations.map(l => 
+                  l.user_id === newRow.user_id 
+                    ? { 
+                        ...l, 
+                        latitude: newRow.latitude, 
+                        longitude: newRow.longitude, 
+                        accuracy: newRow.accuracy, 
+                        status: newRow.status, 
+                        sharing_enabled: newRow.sharing_enabled, 
+                        updated_at: newRow.updated_at,
+                        has_location: true,
+                        is_stale: false 
+                      } 
+                    : l
+                );
+             }
+          }
+          // Mark for refetch if INSERT, DELETE, or unknown user
+          needsFetch = true;
+          return currentLocations;
+        });
+
+        // Safely execute the network side-effect outside the React updater
+        if (needsFetch && myUserId) setTimeout(() => fetchLocations(myUserId), 0);
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[FAMILY MAP] Subscribed! Fetching initial state...');
+          fetchLocations(myUserId);
+          fetchNearbyResponders();
+        }
+      });
 
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
       supabase.removeChannel(channel);
     };
-  }, [sharingEnabled, family?.id]); // Depend on family.id to restart polling on family change
+  }, [family?.id, myUserId]);
 
-  const fetchLocations = async () => {
+  // Client-side presence sweep (runs every 30s to locally detect 15m staleness)
+  useEffect(() => {
+    const sweepInterval = setInterval(() => {
+      setLocations(currentLocations => {
+        let changed = false;
+        const now = Date.now();
+        const staleThreshold = 15 * 60 * 1000; // 15 mins
+
+        const updated = currentLocations.map(loc => {
+          if (!loc.updated_at) return loc;
+          const dt = new Date(loc.updated_at).getTime();
+          const isStale = (now - dt) > staleThreshold;
+          
+          if (isStale && (!loc.is_stale || loc.status !== 'OFFLINE')) {
+            changed = true;
+            return { ...loc, status: 'OFFLINE' as any, is_stale: true };
+          }
+          if (!isStale && loc.is_stale) {
+             changed = true;
+             return { ...loc, is_stale: false };
+          }
+          return loc;
+        });
+
+        return changed ? updated : currentLocations;
+      });
+    }, 30000);
+    return () => clearInterval(sweepInterval);
+  }, []);
+
+  // Periodic location push (runs every 30s when sharing is enabled)
+  useEffect(() => {
+    let pushInterval: NodeJS.Timeout | null = null;
+    
+    if (sharingEnabled && !errorMsg) {
+      pushInterval = setInterval(() => {
+        updateMyLocation();
+      }, 30000);
+    }
+    
+    return () => {
+      if (pushInterval) clearInterval(pushInterval);
+    };
+  }, [sharingEnabled, errorMsg]);
+
+  const fetchLocations = async (userId: string | null) => {
     if (!family) return;
 
-    const userId = currentUserIdRef.current;
     const familyId = family.id;
+    // Capture the fetch start time. Any response that arrives after a user
+    // toggle (toggleTimestampRef.current > fetchStartTime) will be ignored
+    // for the sharing_enabled sync so the user's explicit intent wins.
+    const fetchStartTime = Date.now();
 
     console.log('[FAMILY LIVE MAP FETCH] userId =', userId);
     console.log('[FAMILY LIVE MAP FETCH] familyId =', familyId);
@@ -265,6 +377,9 @@ export default function FamilyLiveMapScreen() {
       
       // Guard against stale responses - only update if familyId hasn't changed
       if (currentFamilyIdRef.current === familyId && currentUserIdRef.current === userId) {
+        // Attach the fetch start time so the sync useEffect can compare it
+        // against the last toggle timestamp.
+        (data as any).__fetchStartTime = fetchStartTime;
         setLocations(data);
         setErrorMsg(null);
       }
@@ -319,16 +434,22 @@ export default function FamilyLiveMapScreen() {
   };
 
   const handleToggleSharing = async (val: boolean) => {
+    // Record when this explicit toggle happened. Any fetch response that
+    // started before this timestamp will not overwrite the user's choice.
+    toggleTimestampRef.current = Date.now();
     setSharingEnabled(val);
+    // Persist the preference so it survives navigation and app restart.
+    AsyncStorage.setItem(SHARING_PREF_KEY, val ? 'true' : 'false').catch(() => {});
     try {
       await familyLocationsApi.toggleSharing(val);
       if (val) {
         await updateMyLocation();
-        await fetchLocations();
+        await fetchLocations(myUserId);
       }
     } catch (e) {
       Alert.alert('Error', 'Could not update sharing preference.');
       setSharingEnabled(!val);
+      AsyncStorage.setItem(SHARING_PREF_KEY, val ? 'false' : 'true').catch(() => {});
     }
   };
 
@@ -411,35 +532,106 @@ export default function FamilyLiveMapScreen() {
         ) : errorMsg ? (
           <View style={[styles.center, { backgroundColor: '#E2E8F0' }]}>
             <Text style={styles.errorText}>{errorMsg}</Text>
-            <Text style={styles.retryText} onPress={fetchLocations}>Tap to retry</Text>
+            <Text style={styles.retryText} onPress={() => myUserId && fetchLocations(myUserId)}>Tap to retry</Text>
           </View>
         ) : (() => {
           const plottableLocs = locations.filter(l => l.has_location && l.sharing_enabled && l.latitude != null && l.longitude != null);
-          const myLoc = plottableLocs.find(l => l.user_id === myUserId);
-          const centerLoc = myLoc || plottableLocs[0];
-          const centerCoordinate: [number, number] = centerLoc ? [centerLoc.longitude!, centerLoc.latitude!] : defaultCenterCoordinate;
           
+          // Use stable camera position — derived once on mount from GPS, never
+          // re-derived from the locations array so Realtime updates don't jump the camera.
+          const myLoc = plottableLocs.find(l => l.user_id === myUserId);
+          if (!cameraPositionRef.current) {
+            // First render with data: seed camera from my location or first member.
+            const seedLoc = myLoc || plottableLocs[0];
+            cameraPositionRef.current = {
+              center: seedLoc
+                ? [seedLoc.longitude!, seedLoc.latitude!]
+                : defaultCenterCoordinate,
+              zoom: mapZoom,
+            };
+          }
+          const stableCamera = cameraPositionRef.current;
+          
+          if (isExpoGo || !MapLibreGL) {
+            return (
+              <View style={styles.mapFallback}>
+                <Text style={styles.fallbackText}>Map requires native build.</Text>
+              </View>
+            );
+          }
+
+          const MapComponent = MapLibreGL.Map;
+          const CameraComponent = MapLibreGL.Camera;
+          const MarkerComp = MapLibreGL.Marker;
+
           return (
-            <MapRenderer
-              locations={locations}
-              myUserId={myUserId}
-              mapZoom={mapZoom}
-              centerCoordinate={centerCoordinate}
-            />
+            <MapComponent
+              style={StyleSheet.absoluteFillObject}
+              mapStyle={getMapStyleUrl(mapStyleId)}
+              logo={false}
+              attribution={true}
+              attributionPosition={{ bottom: 8, right: 8 }}
+            >
+              <CameraComponent
+                zoom={stableCamera.zoom}
+                center={stableCamera.center}
+                duration={0}
+              />
+              {plottableLocs.map(loc => (
+                <MarkerComp
+                  key={loc.user_id}
+                  id={`family-marker-${loc.user_id}`}
+                  lngLat={[loc.longitude!, loc.latitude!]}
+                  anchor="center"
+                >
+                  <View style={[styles.markerView, { backgroundColor: getStatusColor(loc.status, loc.is_stale) }]}>
+                    <View style={styles.markerInnerDot} />
+                  </View>
+                </MarkerComp>
+              ))}
+            </MapComponent>
           );
         })()}
 
         {/* Zoom controls */}
         {locations.some(l => l.has_location && l.sharing_enabled) && (
           <View style={styles.zoomControls}>
-            <TouchableOpacity style={styles.zoomButton} onPress={() => setMapZoom(z => Math.min(19, z + 1))}>
+            <TouchableOpacity style={styles.zoomButton} onPress={() => {
+              const next = Math.min(19, mapZoom + 1);
+              setMapZoom(next);
+              if (cameraPositionRef.current) cameraPositionRef.current = { ...cameraPositionRef.current, zoom: next };
+            }}>
               <Text style={styles.zoomButtonText}>+</Text>
             </TouchableOpacity>
             <View style={styles.zoomDivider} />
-            <TouchableOpacity style={styles.zoomButton} onPress={() => setMapZoom(z => Math.max(12, z - 1))}>
+            <TouchableOpacity style={styles.zoomButton} onPress={() => {
+              const next = Math.max(12, mapZoom - 1);
+              setMapZoom(next);
+              if (cameraPositionRef.current) cameraPositionRef.current = { ...cameraPositionRef.current, zoom: next };
+            }}>
               <Text style={styles.zoomButtonText}>−</Text>
             </TouchableOpacity>
           </View>
+        )}
+
+        {/* My Location button — the only action that re-centers the camera */}
+        {locations.some(l => l.has_location && l.sharing_enabled) && (
+          <TouchableOpacity
+            style={styles.myLocationButton}
+            onPress={async () => {
+              try {
+                const loc = await getCurrentLocationForAlert(true);
+                if (loc && !loc.permissionDenied && loc.latitude && loc.longitude) {
+                  const center: [number, number] = [loc.longitude, loc.latitude];
+                  cameraPositionRef.current = { center, zoom: 17 };
+                  setMapZoom(17);
+                  setDefaultCenterCoordinate(center); // triggers re-render to apply new camera
+                }
+              } catch (_) {}
+            }}
+          >
+            <Text style={styles.myLocationButtonText}>◎</Text>
+          </TouchableOpacity>
         )}
 
         {/* OSM Attribution */}
@@ -699,6 +891,27 @@ const styles = StyleSheet.create({
   osmText: {
     fontSize: 9,
     color: '#64748B',
+  },
+  myLocationButton: {
+    position: 'absolute',
+    right: 16,
+    bottom: '28%', // sits above the zoom control block
+    backgroundColor: 'white',
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  myLocationButtonText: {
+    fontSize: 22,
+    color: '#4F46E5',
+    fontWeight: '600',
   },
 
   // Markers

@@ -1,13 +1,14 @@
-import React, { useEffect } from 'react';
+﻿with open('src/components/NearbyRespondersList.tsx', 'w', encoding='utf-8') as f:
+    f.write('''import React, { useEffect } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { BottomSheetFlatList } from '@gorhom/bottom-sheet';
 
 export const NearbyRespondersList = ({ responders, loading, sharingEnabled }: any) => {
   useEffect(() => {
     if (responders) {
-      console.log(`[NearbyRespondersList] API member count: ${responders.length}`);
-      console.log(`[NearbyRespondersList] transformed member count: ${responders.length}`);
-      console.log(`[NearbyRespondersList] rendered member IDs:`, responders.map((r: any) => r.user_id));
+      console.log([NearbyRespondersList] API member count: );
+      console.log([NearbyRespondersList] transformed member count: );
+      console.log([NearbyRespondersList] rendered member IDs:, responders.map((r: any) => r.user_id));
     }
   }, [responders]);
 
@@ -48,12 +49,12 @@ export const NearbyRespondersList = ({ responders, loading, sharingEnabled }: an
           <View style={styles.card}>
             <View style={styles.headerRow}>
               <Text style={styles.name}>{r.name}</Text>
-              <View style={[styles.statusDot, { backgroundColor: r.status === 'SAFE' ? '#22C55E' : '#F59E0B' }]} />
+              <View style={[styles.statusDot, { backgroundColor: r.status === 'SAFE' ? '#22C35E' : '#F59E0B' }]} />
             </View>
             <Text style={styles.role}>{r.role === 'admin' ? 'Guardian' : 'Family Member'}</Text>
             <View style={styles.distanceRow}>
               <Text style={styles.distanceText}>{r.distance_km} km away</Text>
-              {r.eta_minutes && <Text style={styles.etaText}>{` - ${r.eta_minutes} min ETA`}</Text>}
+              {r.eta_minutes && <Text style={styles.etaText}> - {r.eta_minutes} min ETA</Text>}
             </View>
           </View>
         )}
@@ -135,3 +136,4 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   }
 });
+''')

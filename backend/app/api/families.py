@@ -34,43 +34,6 @@ def _insert_in_app_notification(service_client, *, user_id: str, actor_user_id: 
 
 
 # -----------------------------------------------------------------------
-# PROFILE MANAGEMENT
-# -----------------------------------------------------------------------
-
-def ensure_profile_exists(current_user, service_client):
-    try:
-        profile_res = service_client.table("profiles").select("id").eq("id", current_user.id).execute()
-        profile_exists = len(profile_res.data) > 0
-        profile_created = False
-
-        if not profile_exists:
-            email = getattr(current_user, "email", "")
-            metadata = getattr(current_user, "user_metadata", {}) or {}
-            full_name = metadata.get("full_name", "")
-            
-            new_code = ""
-            for _ in range(10):
-                candidate = str(random.randint(0, 999999)).zfill(6)
-                collision = service_client.table("profiles").select("id").eq("guardian_code", candidate).neq("id", current_user.id).execute()
-                if not collision.data:
-                    new_code = candidate
-                    break
-            
-            if not new_code:
-                raise Exception("Failed to generate unique guardian_code")
-            
-            service_client.table("profiles").upsert({
-                "id": current_user.id,
-                "email": email,
-                "full_name": full_name,
-                "guardian_code": new_code
-            }).execute()
-            profile_created = True
-
-        logger.info(f"[PROFILE ENSURE] current_user.id={current_user.id} email={getattr(current_user, 'email', '')} profile_exists={profile_exists} profile_created={profile_created}")
-    except Exception as e:
-        logger.error(f"Error ensuring profile exists for user {current_user.id}: {e}")
-        raise HTTPException(status_code=500, detail="Could not verify user profile, please try again")
 
 
 # -----------------------------------------------------------------------
@@ -131,8 +94,6 @@ def create_family(family_in: FamilyCreate, auth_data: dict = Depends(get_current
     user = auth_data["user"]
     service_client = get_service_role_client()
 
-    ensure_profile_exists(user, service_client)
-
     try:
         existing = (
             service_client.table("family_members")
@@ -183,8 +144,6 @@ def create_family(family_in: FamilyCreate, auth_data: dict = Depends(get_current
 def join_family(join_in: JoinRequestCreate, auth_data: dict = Depends(get_current_user)):
     user = auth_data["user"]
     service_client = get_service_role_client()
-
-    ensure_profile_exists(user, service_client)
 
     try:
         # Must not already be in an active family

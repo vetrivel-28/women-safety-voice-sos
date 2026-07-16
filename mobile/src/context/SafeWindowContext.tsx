@@ -6,13 +6,13 @@ import * as Location from 'expo-location';
 import { distanceBetweenPointsMeters, isRouteDeviation } from '../utils/geoUtils';
 import { useContacts } from './ContactsContext';
 import { getRoute } from '../services/geocodingService';
-import { startBackgroundLocationService, stopBackgroundLocationService } from '../services/backgroundLocation';
 import { Alert, AppState, NativeModules, NativeEventEmitter, PermissionsAndroid, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { checkIsExempt, requestExemption } from '../modules/BatteryOptimization';
 import { scheduleLocalNotification, cancelLocalNotification } from '../services/notificationService';
 import { supabase } from '../lib/supabaseClient';
 import { apiClient } from '../api/client';
+import { locationSharingEmitter, startSafeWindowLocation, stopSafeWindowLocation } from '../modules/LocationSharingModule';
 
 const { SafeHerAudioModule } = NativeModules;
 const audioEmitter = SafeHerAudioModule ? new NativeEventEmitter(SafeHerAudioModule) : null;
@@ -194,11 +194,59 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           estimated_duration_minutes: active.estimated_duration_minutes,
           estimated_arrival_at: active.estimated_arrival_at,
           route_status: active.route_status,
+          // routePoints is intentionally left as prev.routePoints here;
+          // it will be populated below by the async getRoute re-fetch.
         }));
 
         missedTriggeredRef.current = false;
         completeInFlightRef.current = false;
-        startBackgroundLocationService();
+
+        // Fix B: Seed currentLocation immediately from the last known backend position
+        // so the traveler marker is visible before the native GPS service fires its
+        // first event. Without this, currentLocation stays null after app kill/reopen.
+        if (active.current_latitude != null && active.current_longitude != null) {
+          setCurrentLocation({ lat: active.current_latitude, lon: active.current_longitude });
+        } else if (active.start_latitude != null && active.start_longitude != null) {
+          // Fall back to start location if no live fix is recorded yet
+          setCurrentLocation({ lat: active.start_latitude, lon: active.start_longitude });
+        }
+
+        // Fix A: Re-fetch the route polyline so the map renders the route after app
+        // kill/reopen. restoreJourney previously left routePoints = [] because only the
+        // 2-point initialRoute is set during a fresh startSafeWindow, and the async
+        // getRoute result is never persisted to the backend or to AsyncStorage.
+        if (active.start_latitude != null && active.destination_latitude != null) {
+          const restoreStart = { latitude: active.start_latitude, longitude: active.start_longitude };
+          const restoreDest  = { latitude: active.destination_latitude, longitude: active.destination_longitude };
+          // Set a straight-line placeholder immediately so the camera has something to
+          // fit to while the real OSRM fetch is in flight.
+          setSafeWindow(prev => prev.status === 'ACTIVE' && prev.journeyId === active.id ? {
+            ...prev,
+            routePoints: [
+              { lat: active.start_latitude, lon: active.start_longitude },
+              { lat: active.destination_latitude, lon: active.destination_longitude },
+            ]
+          } : prev);
+          // Then fetch the real route asynchronously
+          getRoute(restoreStart, restoreDest)
+            .then(fetchedRoute => {
+              if (fetchedRoute && fetchedRoute.length >= 2) {
+                setSafeWindow(prev => prev.status === 'ACTIVE' && prev.journeyId === active.id
+                  ? { ...prev, routePoints: fetchedRoute }
+                  : prev
+                );
+              }
+            })
+            .catch(() => {
+              // Straight-line fallback remains — non-fatal
+            });
+        }
+
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          const apiUrl = apiClient.defaults.baseURL || 'https://women-safety-voice-sos.onrender.com';
+          await startSafeWindowLocation(session.access_token, apiUrl, session.user.id);
+        }
 
         // Immediately check if already missed while app was closed
         if (now.getTime() >= new Date(checkInDueStr).getTime()) {
@@ -274,9 +322,45 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   };
 
   const startSafeWindow = async (durationMinutes: SafeWindowDuration, checkInMinutes: number, startLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }, destLoc?: { latitude: number, longitude: number, address?: string, placeId?: string, provider?: string }, trustedPlace?: TrustedPlace | null) => {
-    if (startInFlightRef.current || completeInFlightRef.current || safeWindow.status === 'ACTIVE') {
+    // Fast path: in-flight guard cannot be self-healed — bail immediately.
+    if (startInFlightRef.current || completeInFlightRef.current) {
       throw new Error("Action currently in flight or another journey is already active.");
     }
+
+    // If client state says ACTIVE, verify with the backend before blocking.
+    // This self-heals the case where the app was killed mid-journey and
+    // restoreJourney ran into a stale/orphaned local state.
+    if (safeWindow.status === 'ACTIVE') {
+      try {
+        const verifyResp = await apiClient.get('/api/journeys');
+        const serverActive = Array.isArray(verifyResp.data)
+          ? verifyResp.data.find((j: any) => j.status === 'active')
+          : null;
+
+        if (!serverActive) {
+          // Backend has no active journey — client state is stale. Clear it and proceed.
+          console.warn('[SafeWindow] Client thought journey was ACTIVE but backend has none. Clearing stale state.');
+          setSafeWindow(initialState);
+          startInFlightRef.current = false;
+          completeInFlightRef.current = false;
+          missedTriggeredRef.current = false;
+          stopAudioCapture();
+          // Fall through — do NOT return; we want to start a new journey below.
+        } else {
+          // Backend confirms an active journey genuinely exists — block correctly.
+          throw new Error("Action currently in flight or another journey is already active.");
+        }
+      } catch (verifyErr: any) {
+        // If the verify call itself fails (network error, 401), preserve the
+        // existing behaviour and block rather than risk double-starting.
+        if (verifyErr.message?.includes('already active') || verifyErr.message?.includes('in flight')) {
+          throw verifyErr;
+        }
+        // Network/auth failure during verify — block conservatively.
+        throw new Error("Action currently in flight or another journey is already active.");
+      }
+    }
+
     startInFlightRef.current = true;
     setIsStartingJourney(true);
     missedAlertCreated.current = false;
@@ -317,9 +401,27 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         // Async route fetch
         getRoute(actualStartLoc, destLoc).then(fetchedRoute => {
           if (fetchedRoute) {
-            setSafeWindow(prev => prev.status === 'ACTIVE' ? { ...prev, routePoints: fetchedRoute } : prev);
+            setSafeWindow(prev => {
+              if (prev.status === 'ACTIVE') {
+                // [MAP-DEBUG] OSRM resolved AFTER setSafeWindow — route will be applied
+                console.log('[MAP-DEBUG] OSRM getRoute resolved, prev.status === ACTIVE → applying', fetchedRoute.length, 'points');
+                return { ...prev, routePoints: fetchedRoute };
+              } else {
+                // [MAP-DEBUG] OSRM resolved BEFORE setSafeWindow set status to ACTIVE
+                // — result is discarded. This is the race-condition bug path.
+                console.warn('[MAP-DEBUG] OSRM getRoute resolved but prev.status =', prev.status, '(not ACTIVE) → result DISCARDED. Race condition hit.');
+                return prev;
+              }
+            });
+          } else {
+            console.warn('[MAP-DEBUG] OSRM getRoute returned null — no route to apply');
           }
-        }).catch(() => { });
+        }).catch((err) => {
+          console.warn('[MAP-DEBUG] OSRM getRoute threw:', err);
+        });
+        console.log('[MAP-DEBUG] startSafeWindow: initialRoute set with 2 points, OSRM fetch fired async');
+      } else {
+        console.log('[MAP-DEBUG] startSafeWindow: no destination set — initialRoute is [] (no polyline will render)');
       }
 
       let journeyData: any;
@@ -328,7 +430,6 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (!session) throw { response: { status: 401 } };
 
         const payload = {
-          journey_name: "Safe Journey",
           start_label: "Current Location",
           ...(actualStartLoc ? { start_latitude: actualStartLoc.latitude, start_longitude: actualStartLoc.longitude, start_address: actualStartLoc.address, start_place_id: (actualStartLoc as any).placeId, location_provider: (actualStartLoc as any).provider || (destLoc as any)?.provider } : {}),
           ...(destLoc ? { destination_label: "Destination", destination_latitude: destLoc.latitude, destination_longitude: destLoc.longitude, destination_address: destLoc.address, destination_place_id: (destLoc as any).placeId, location_provider: (destLoc as any).provider || (actualStartLoc as any)?.provider } : {}),
@@ -355,7 +456,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       } catch (e: any) {
         console.warn("Could not sync journey start to backend", e);
         console.error("[SafeWindowStart] failed:", e.response?.status, e.response?.data);
-        
+
         let errorMessage = "Could not start Safe Window. Please try again.";
 
         if (e.response) {
@@ -425,7 +526,11 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         route_status: journeyData.route_status,
       });
 
-      startBackgroundLocationService();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        const apiUrl = apiClient.defaults.baseURL || 'https://women-safety-voice-sos.onrender.com';
+        await startSafeWindowLocation(session.access_token, apiUrl, session.user.id);
+      }
       startAudioCapture(); // Request microphone natively independently
       await scheduleNextNotification(journeyData.check_in_due_at, demoMode);
     } finally {
@@ -452,7 +557,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       }
     }
     setSafeWindow(initialState);
-    stopBackgroundLocationService();
+    await stopSafeWindowLocation();
     stopAudioCapture(); // User deliberately ends journey
     completeInFlightRef.current = false;
     arrivalStartTimeRef.current = null;
@@ -469,7 +574,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (journey.status === 'completed' || journey.status === 'missed') {
           setSafeWindow(prev => ({ ...prev, status: journey.status === 'completed' ? 'COMPLETED' : 'MISSED_CHECKIN' }));
           if (journey.status === 'completed') {
-            stopBackgroundLocationService();
+            await stopSafeWindowLocation();
             stopAudioCapture(); // User safely completes journey
           }
           return;
@@ -489,7 +594,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       console.warn("Could not check in", e);
       if (e.response && (e.response.status === 404 || e.response.status === 409)) {
         setSafeWindow(prev => ({ ...prev, status: 'COMPLETED' }));
-        stopBackgroundLocationService();
+        await stopSafeWindowLocation();
       }
     } finally {
       checkInInFlightRef.current = false;
@@ -607,7 +712,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     if (safeWindow.status === 'ACTIVE') {
       timerInterval = setInterval(checkTimers, 1000);
     }
-    
+
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (nextAppState === 'active' && safeWindow.status === 'ACTIVE') {
         checkTimers();
@@ -622,7 +727,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   useEffect(() => {
     let locationSubscription: Location.LocationSubscription | null = null;
-    let watchPromise: Promise<Location.LocationSubscription> | null = null;
+    let emitterSubscription: any = null;
     let isMounted = true;
 
     const startLocationWatcher = async () => {
@@ -641,21 +746,23 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (!isMounted) return;
         console.log("[SafeWindowContext] Location permission granted. Starting watcher...");
 
-        watchPromise = Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.Balanced,
-            timeInterval: 5000,
-            distanceInterval: 10,
-          },
-          async (loc) => {
+        emitterSubscription = locationSharingEmitter.addListener('onLocationUpdated', async (payloadStr: string) => {
             const currentSafeWindow = safeWindowRef.current;
             if (!isMounted || currentSafeWindow.status !== 'ACTIVE') return;
-            console.log(`[SafeWindowContext] Watcher received location: lat=${loc.coords.latitude}, lon=${loc.coords.longitude}, accuracy=${loc.coords.accuracy}`);
-            
+
+            let loc;
+            try {
+              loc = JSON.parse(payloadStr);
+            } catch(e) {
+              return;
+            }
+
+            console.log(`[SafeWindowContext] Watcher received location: lat=${loc.latitude}, lon=${loc.longitude}, accuracy=${loc.accuracy}`);
+
             const now = new Date().getTime();
-            const currentLoc = { lat: loc.coords.latitude, lon: loc.coords.longitude };
+            const currentLoc = { lat: loc.latitude, lon: loc.longitude };
             setCurrentLocation(currentLoc);
-            const capturedAt = new Date(loc.timestamp).toISOString();
+            const capturedAt = new Date(loc.timestamp || now).toISOString();
 
             // 1. Sync backend tracking (every 20s OR > 25m movement)
             if (currentSafeWindow.journeyId && !isSyncingLocationRef.current) {
@@ -765,16 +872,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             }
           }
         );
-        
-        locationSubscription = await watchPromise;
-        
-        if (!isMounted && locationSubscription) {
-          console.log("[SafeWindowContext] Stopping delayed location watcher.");
-          locationSubscription.remove();
-          locationSubscription = null;
-        }
 
-      } catch (err) {
+        } catch (err) {
         console.error("[SafeWindowContext] Error starting watcher", err);
       }
     };
@@ -785,12 +884,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     return () => {
       isMounted = false;
-      if (locationSubscription) {
-        console.log("[SafeWindowContext] Stopping location watcher.");
-        locationSubscription.remove();
-      } else if (watchPromise) {
-        console.log("[SafeWindowContext] Resolving pending watcher for cleanup.");
-        watchPromise.then(sub => sub.remove()).catch(() => {});
+      if (emitterSubscription) {
+        emitterSubscription.remove();
       }
     };
   }, [safeWindow.status]);

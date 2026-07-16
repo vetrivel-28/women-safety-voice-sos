@@ -108,4 +108,12 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "message": "Backend is healthy"}
+    try:
+        # Perform a lightweight query to ensure the DB connection is fully warm
+        client = get_supabase_client()
+        client.table("profiles").select("id").limit(1).execute()
+        return {"status": "ok", "message": "Backend and Database are healthy"}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Database connection not ready")

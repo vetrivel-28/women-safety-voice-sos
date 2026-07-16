@@ -25,6 +25,7 @@ class LocationUpdate(BaseModel):
     accuracy: Optional[float] = None
     status: Optional[str] = None   # SAFE | IN_SAFE_WINDOW | SOS_ACTIVE | CHECKIN_MISSED | OFFLINE
     source: Optional[str] = None
+    timestamp: Optional[int] = None
 
 
 class SharingToggle(BaseModel):
@@ -53,16 +54,16 @@ def _haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: floa
     """
     import math
     R = 6371000  # Earth's radius in meters
-    
+
     lat1_rad = math.radians(lat1)
     lat2_rad = math.radians(lat2)
     delta_lat = math.radians(lat2 - lat1)
     delta_lon = math.radians(lon2 - lon1)
-    
+
     a = (math.sin(delta_lat / 2) ** 2 +
          math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2)
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    
+
     return R * c
 
 
@@ -99,7 +100,7 @@ def get_family_locations(family_id: str, auth_data: dict = Depends(get_current_u
             .eq("status", "active")
             .execute()
         )
-        
+
         # Verify caller is in the active members list
         is_member = any(m["user_id"] == user.id for m in members_res.data or [])
         if not is_member:
@@ -114,22 +115,22 @@ def get_family_locations(family_id: str, auth_data: dict = Depends(get_current_u
             .eq("family_id", family_id)
             .execute()
         )
-        
+
         loc_map = {loc["user_id"]: loc for loc in locs_res.data or []}
 
         stale_threshold = datetime.now(timezone.utc) - timedelta(minutes=STALE_MINUTES)
         result = []
-        
+
         for m in members:
             loc = loc_map.get(m["user_id"])
             has_location = bool(loc)
-            
+
             # Default missing locations to safe offline state
             loc_data = loc or {}
             sharing_enabled = loc_data.get("sharing_enabled", False)
             status = loc_data.get("status", "OFFLINE")
             is_stale = False
-            
+
             if has_location and loc_data.get("updated_at"):
                 try:
                     dt = datetime.fromisoformat(loc_data["updated_at"].replace("Z", "+00:00"))
@@ -140,7 +141,7 @@ def get_family_locations(family_id: str, auth_data: dict = Depends(get_current_u
                         is_stale = False
                 except Exception:
                     is_stale = True
-            
+
             resp_obj = {
                 "id": loc_data.get("id"),
                 "family_id": family_id,
@@ -154,7 +155,7 @@ def get_family_locations(family_id: str, auth_data: dict = Depends(get_current_u
                 "updated_at": loc_data.get("updated_at"),
                 "is_stale": is_stale,
             }
-            
+
             # Privacy mask: omit coordinates if not sharing
             if sharing_enabled:
                 resp_obj["latitude"] = loc_data.get("latitude")
@@ -164,7 +165,7 @@ def get_family_locations(family_id: str, auth_data: dict = Depends(get_current_u
                 resp_obj["latitude"] = None
                 resp_obj["longitude"] = None
                 resp_obj["accuracy"] = None
-                
+
             result.append(resp_obj)
 
         print(f"[LOCATIONS RESPONSE DEBUG] familyId={family_id} count={len(result)}", flush=True)
@@ -203,7 +204,26 @@ def update_my_location(location_in: LocationUpdate, auth_data: dict = Depends(ge
             raise HTTPException(status_code=400, detail="Not an active family member")
 
         family_id = membership.data[0]["family_id"]
-        now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        # Check existing location to prevent older timestamp overwrite
+        existing_loc = service_client.table("family_member_locations").select("updated_at").eq("user_id", user.id).eq("family_id", family_id).execute()
+
+        if location_in.timestamp:
+            update_dt = datetime.fromtimestamp(location_in.timestamp / 1000.0, timezone.utc)
+            now_str = update_dt.isoformat().replace("+00:00", "Z")
+        else:
+            now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            update_dt = datetime.now(timezone.utc)
+
+        if existing_loc.data and existing_loc.data[0].get("updated_at"):
+            existing_str = existing_loc.data[0]["updated_at"]
+            try:
+                existing_dt = datetime.fromisoformat(existing_str.replace("Z", "+00:00"))
+                if update_dt < existing_dt:
+                    logger.warning(f"Rejecting older location update for {user.id}")
+                    return {"detail": "Skipped older location update"}
+            except Exception as parse_err:
+                pass
 
         # Resolve live safety status if not explicitly provided
         live_status = location_in.status or _resolve_member_status(service_client, user.id)
@@ -310,7 +330,7 @@ def get_nearby_responders(family_id: str, auth_data: dict = Depends(get_current_
             .eq("status", "active")
             .execute()
         )
-        
+
         # Verify caller is in the active members list
         is_member = any(m["user_id"] == user.id for m in members_res.data or [])
         if not is_member:
@@ -352,18 +372,18 @@ def get_nearby_responders(family_id: str, auth_data: dict = Depends(get_current_
             .eq("family_id", family_id)
             .execute()
         )
-        
+
         loc_map = {loc["user_id"]: loc for loc in all_locs_res.data or []}
 
         responders = []
-        
+
         for m in members:
             # Skip self
             if m["user_id"] == user.id:
                 continue
-            
+
             loc = loc_map.get(m["user_id"])
-            
+
             # Must have location, sharing enabled, and valid coordinates
             if not loc:
                 continue
@@ -371,24 +391,24 @@ def get_nearby_responders(family_id: str, auth_data: dict = Depends(get_current_
                 continue
             if loc.get("latitude") is None or loc.get("longitude") is None:
                 continue
-            
+
             try:
                 lat = float(loc["latitude"])
                 lon = float(loc["longitude"])
             except (ValueError, TypeError):
                 continue
-            
+
             # Calculate distance
             distance_meters = _haversine_distance_meters(origin_lat, origin_lon, lat, lon)
             distance_km = round(distance_meters / 1000.0, 2)
-            
+
             # Get member status
             status = _resolve_member_status(service_client, m["user_id"])
-            
+
             # Get name from profile
             profile = m.get("profiles", {})
             name = profile.get("full_name") or profile.get("email") or m["user_id"]
-            
+
             responders.append({
                 "user_id": m["user_id"],
                 "name": name,
@@ -397,10 +417,10 @@ def get_nearby_responders(family_id: str, auth_data: dict = Depends(get_current_
                 "last_updated": loc.get("updated_at"),
                 "status": status,
             })
-        
+
         # Sort by distance (nearest first)
         responders.sort(key=lambda r: r["distance_km"])
-        
+
         return NearbyRespondersResponse(
             family_id=family_id,
             origin_available=True,
