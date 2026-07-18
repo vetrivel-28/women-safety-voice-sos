@@ -584,7 +584,10 @@ def check_in_journey(journey_id: str, auth_data: dict = Depends(get_current_user
             
         if check_in_due_dt and now >= check_in_due_dt:
             # Late check-in routing -> missed
-            return handle_missed_checkin(journey_id, auth_data)
+            res = handle_missed_checkin(journey_id, auth_data)
+            if isinstance(res, dict) and "safe_window" in res:
+                return res["safe_window"]
+            return res
 
         # Otherwise standard check-in
         interval_secs = journey.get("check_in_interval_seconds")

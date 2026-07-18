@@ -18,8 +18,10 @@ class JourneyService:
         now_str = now.isoformat().replace("+00:00", "Z")
 
         try:
-            # Escalate: ACTIVE → status keeps 'active' but severity becomes HIGH + escalated_at set
+            # Escalate: ACTIVE → MISSED (severity HIGH + escalated_at set)
             update_res = service_client.table("safe_windows").update({
+                "status": "missed",
+                "missed_at": now_str,
                 "missed_check_in_at": now_str,
                 "severity": "HIGH",
                 "escalated_at": now_str,

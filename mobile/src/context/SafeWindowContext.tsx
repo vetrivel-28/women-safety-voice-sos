@@ -13,6 +13,7 @@ import { scheduleLocalNotification, cancelLocalNotification } from '../services/
 import { supabase } from '../lib/supabaseClient';
 import { apiClient } from '../api/client';
 import { locationSharingEmitter, startSafeWindowLocation, stopSafeWindowLocation } from '../modules/LocationSharingModule';
+import polyline from '@mapbox/polyline';
 
 const { SafeHerAudioModule } = NativeModules;
 const audioEmitter = SafeHerAudioModule ? new NativeEventEmitter(SafeHerAudioModule) : null;
@@ -212,34 +213,25 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
 
         // Fix A: Re-fetch the route polyline so the map renders the route after app
-        // kill/reopen. restoreJourney previously left routePoints = [] because only the
-        // 2-point initialRoute is set during a fresh startSafeWindow, and the async
-        // getRoute result is never persisted to the backend or to AsyncStorage.
+        // kill/reopen.
         if (active.start_latitude != null && active.destination_latitude != null) {
-          const restoreStart = { latitude: active.start_latitude, longitude: active.start_longitude };
-          const restoreDest  = { latitude: active.destination_latitude, longitude: active.destination_longitude };
-          // Set a straight-line placeholder immediately so the camera has something to
-          // fit to while the real OSRM fetch is in flight.
+          let parsedRoute = [
+            { lat: active.start_latitude, lon: active.start_longitude },
+            { lat: active.destination_latitude, lon: active.destination_longitude },
+          ];
+          if (active.route_polyline) {
+            try {
+              const decoded = polyline.decode(active.route_polyline);
+              parsedRoute = decoded.map((coord: number[]) => ({ lat: coord[0], lon: coord[1] }));
+            } catch (e) {
+              console.warn("Failed to decode active route_polyline", e);
+            }
+          }
+          
           setSafeWindow(prev => prev.status === 'ACTIVE' && prev.journeyId === active.id ? {
             ...prev,
-            routePoints: [
-              { lat: active.start_latitude, lon: active.start_longitude },
-              { lat: active.destination_latitude, lon: active.destination_longitude },
-            ]
+            routePoints: parsedRoute
           } : prev);
-          // Then fetch the real route asynchronously
-          getRoute(restoreStart, restoreDest)
-            .then(fetchedRoute => {
-              if (fetchedRoute && fetchedRoute.length >= 2) {
-                setSafeWindow(prev => prev.status === 'ACTIVE' && prev.journeyId === active.id
-                  ? { ...prev, routePoints: fetchedRoute }
-                  : prev
-                );
-              }
-            })
-            .catch(() => {
-              // Straight-line fallback remains — non-fatal
-            });
         }
 
         const { data: { session } } = await supabase.auth.getSession();
@@ -398,28 +390,6 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       let initialRoute: { lat: number, lon: number }[] = [];
       if (actualStartLoc && actualStartLoc.latitude && actualStartLoc.longitude && destLoc && destLoc.latitude && destLoc.longitude) {
         initialRoute = [{ lat: actualStartLoc.latitude, lon: actualStartLoc.longitude }, { lat: destLoc.latitude, lon: destLoc.longitude }];
-        // Async route fetch
-        getRoute(actualStartLoc, destLoc).then(fetchedRoute => {
-          if (fetchedRoute) {
-            setSafeWindow(prev => {
-              if (prev.status === 'ACTIVE') {
-                // [MAP-DEBUG] OSRM resolved AFTER setSafeWindow — route will be applied
-                console.log('[MAP-DEBUG] OSRM getRoute resolved, prev.status === ACTIVE → applying', fetchedRoute.length, 'points');
-                return { ...prev, routePoints: fetchedRoute };
-              } else {
-                // [MAP-DEBUG] OSRM resolved BEFORE setSafeWindow set status to ACTIVE
-                // — result is discarded. This is the race-condition bug path.
-                console.warn('[MAP-DEBUG] OSRM getRoute resolved but prev.status =', prev.status, '(not ACTIVE) → result DISCARDED. Race condition hit.');
-                return prev;
-              }
-            });
-          } else {
-            console.warn('[MAP-DEBUG] OSRM getRoute returned null — no route to apply');
-          }
-        }).catch((err) => {
-          console.warn('[MAP-DEBUG] OSRM getRoute threw:', err);
-        });
-        console.log('[MAP-DEBUG] startSafeWindow: initialRoute set with 2 points, OSRM fetch fired async');
       } else {
         console.log('[MAP-DEBUG] startSafeWindow: no destination set — initialRoute is [] (no polyline will render)');
       }
@@ -505,6 +475,17 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (!journeyData) throw new Error(errorMessage);
       }
 
+      let parsedRoute = initialRoute;
+      if (journeyData.route_polyline) {
+        try {
+          const decoded = polyline.decode(journeyData.route_polyline);
+          parsedRoute = decoded.map((coord: number[]) => ({ lat: coord[0], lon: coord[1] }));
+          console.log('[MAP-DEBUG] Successfully decoded backend route_polyline with', parsedRoute.length, 'points');
+        } catch (e) {
+          console.warn('[MAP-DEBUG] Failed to decode backend route_polyline, falling back to straight line', e);
+        }
+      }
+
       setSafeWindow({
         journeyId: journeyData.id,
         status: 'ACTIVE',
@@ -517,7 +498,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         missedCheckInAt: null,
         startLocation: actualStartLoc || null,
         destinationLocation: destLoc || null,
-        routePoints: initialRoute,
+        routePoints: parsedRoute,
         routeDeviationWarningAt: null,
         routeDeviationDetected: false,
         distance_km: journeyData.distance_km,
@@ -556,11 +537,25 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         console.warn("Could not sync journey complete to backend", e);
       }
     }
-    setSafeWindow(initialState);
-    await stopSafeWindowLocation();
-    stopAudioCapture(); // User deliberately ends journey
-    completeInFlightRef.current = false;
-    arrivalStartTimeRef.current = null;
+
+    try {
+      setSafeWindow(initialState);
+      
+      try {
+        await stopSafeWindowLocation();
+      } catch (e) {
+        console.warn("Failed to stop safe window location natively", e);
+      }
+      
+      try {
+        stopAudioCapture(); // User deliberately ends journey
+      } catch (e) {
+        console.warn("Failed to stop audio capture natively", e);
+      }
+    } finally {
+      completeInFlightRef.current = false;
+      arrivalStartTimeRef.current = null;
+    }
   };
 
   const markCheckInSafe = async () => {
@@ -670,16 +665,19 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     try {
       const currentLoc = await getCurrentLocationForAlert();
       if (currentLoc && !currentLoc.permissionDenied) {
-        const start = { latitude: currentLoc.latitude, longitude: currentLoc.longitude };
-        const fetchedRoute = await getRoute(start, safeWindow.destinationLocation);
-        if (fetchedRoute) {
-          setSafeWindow(prev => ({
-            ...prev,
-            routePoints: fetchedRoute,
-            routeDeviationWarningAt: null,
-            routeDeviationDetected: false
-          }));
-        }
+        // Fall back to a straight line from current location to destination
+        // since we no longer rely on frontend routing requests.
+        const fallbackRoute = [
+          { lat: currentLoc.latitude, lon: currentLoc.longitude },
+          { lat: safeWindow.destinationLocation.latitude, lon: safeWindow.destinationLocation.longitude }
+        ];
+        
+        setSafeWindow(prev => ({
+          ...prev,
+          routePoints: fallbackRoute,
+          routeDeviationWarningAt: null,
+          routeDeviationDetected: false
+        }));
       }
     } catch (e) {
       console.warn("Could not resume route", e);
