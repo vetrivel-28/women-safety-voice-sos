@@ -12,6 +12,7 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 from app.services.escalation_worker import sos_escalation_loop
+from app.services.safe_window_sweeper import safe_window_sweep_loop
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -19,11 +20,14 @@ async def lifespan(app: FastAPI):
     logging.basicConfig(level=logging.WARNING)
     logging.getLogger().setLevel(logging.INFO)  # force root level even if handlers already exist
     logging.getLogger("app.services.escalation_worker").setLevel(logging.INFO)
+    logging.getLogger("app.services.safe_window_sweeper").setLevel(logging.INFO)
 
     logger.info("--- Starting FastAPI Application ---")
     
-    # Start SOS escalation worker
+    # Start background workers
     escalation_task = asyncio.create_task(sos_escalation_loop())
+    sweeper_task = asyncio.create_task(safe_window_sweep_loop())
+    
     logger.info(f"Python Version: {sys.version}")
     logger.info(f"Loaded SUPABASE_URL: {settings.SUPABASE_URL}")
     
@@ -36,9 +40,10 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("--- Shutting Down FastAPI Application ---")
     escalation_task.cancel()
+    sweeper_task.cancel()
     try:
-        await escalation_task
-    except asyncio.CancelledError:
+        await asyncio.gather(escalation_task, sweeper_task, return_exceptions=True)
+    except Exception:
         pass
 
 app = FastAPI(

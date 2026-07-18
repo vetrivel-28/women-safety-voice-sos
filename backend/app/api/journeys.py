@@ -111,6 +111,9 @@ class JourneyResponse(BaseModel):
     current_longitude: Optional[float]
     current_address: Optional[str]
     last_location_at: Optional[datetime]
+    route_polyline: Optional[str] = None
+    distance_km: Optional[float] = None
+    estimated_duration_minutes: Optional[int] = None
 
     class Config:
         extra = "allow"
@@ -210,7 +213,7 @@ def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user))
                 route_provider = "osrm"
                 osrm_base_url = os.getenv("OSRM_BASE_URL", "https://router.project-osrm.org")
                 try:
-                    url = f"{osrm_base_url}/route/v1/driving/{s_lng},{s_lat};{d_lng},{d_lat}?overview=false"
+                    url = f"{osrm_base_url}/route/v1/driving/{s_lng},{s_lat};{d_lng},{d_lat}?overview=full&geometries=polyline"
                     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (SafeHer Backend)'})
                     with urllib.request.urlopen(req, timeout=5) as response:
                         data = json.loads(response.read().decode())
@@ -221,6 +224,7 @@ def start_journey(journey_in: dict, auth_data: dict = Depends(get_current_user))
                             
                             distance_km = round(dist_meters / 1000.0, 2)
                             estimated_duration_minutes = max(1, math.ceil(dur_seconds / 60))
+                            route_polyline = route.get("geometry")
                             route_status = "calculated"
                         else:
                             route_status = "unavailable"
@@ -383,11 +387,25 @@ def get_journeys(auth_data: dict = Depends(get_current_user)):
     try:
         result = supabase.table("safe_windows").select("*").eq("user_id", user.id).order("started_at", desc=True).execute()
         
-        # TEMP DEBUG — remove before final commit
-        print(f"GET /api/journeys current_user.id: {user.id}")
-        print(f"GET /api/journeys row count: {len(result.data) if result.data else 0}")
+        journeys = result.data or []
+        now = datetime.now(timezone.utc)
         
-        return result.data
+        # Defensive sweep: if an active journey has expired, escalate it before returning
+        for i, journey in enumerate(journeys):
+            if journey.get("status") == "active":
+                due_str = journey.get("check_in_due_at")
+                if due_str:
+                    due_dt = parse_utc(due_str)
+                    if due_dt and now > due_dt:
+                        try:
+                            from app.services.journey_service import JourneyService
+                            escalate_res = JourneyService.escalate_journey(journey["id"], user.id, reason="AUTO_SWEEP")
+                            if escalate_res.get("success") and escalate_res.get("safe_window"):
+                                journeys[i] = escalate_res["safe_window"]
+                        except Exception as e:
+                            logger.error(f"Defensive sweep failed for {journey['id']}: {e}")
+        
+        return journeys
     except httpx.TimeoutException:
         raise
     except httpx.RequestError:
@@ -599,146 +617,9 @@ def check_in_journey(journey_id: str, auth_data: dict = Depends(get_current_user
 @router.post("/{journey_id}/missed-checkin", status_code=status.HTTP_200_OK)
 def handle_missed_checkin(journey_id: str, auth_data: dict = Depends(get_current_user)):
     user = auth_data["user"]
-    service_client = get_service_role_client()
-
     try:
-        now = datetime.now(timezone.utc)
-        now_str = now.isoformat().replace("+00:00", "Z")
-
-        # Escalate: ACTIVE → status keeps 'active' but severity becomes HIGH + escalated_at set
-        # We do NOT change status to a separate ESCALATED value to avoid breaking existing state machine;
-        # instead we use severity=HIGH and escalated_at to signal escalation.
-        update_res = service_client.table("safe_windows").update({
-            "missed_check_in_at": now_str,
-            "severity": "HIGH",
-            "escalated_at": now_str,
-            "escalated_reason": "MISSED_CHECKIN",
-            "last_escalation_notif_at": now_str,
-            "escalation_notif_count": 1,
-        }).eq("id", journey_id).eq("user_id", user.id).eq("status", "active").execute()
-
-        if not update_res.data:
-            existing = service_client.table("safe_windows").select("*").eq("id", journey_id).eq("user_id", user.id).execute()
-            if not existing.data:
-                raise HTTPException(status_code=404, detail="Journey not found")
-            journey = existing.data[0]
-            return {"success": True, "safe_window": journey, "alert": None,
-                    "guardian_notified": False, "reason": "Already processed"}
-
-        journey = update_res.data[0]
-
-        # Log timeline event
-        try:
-            notification_service._log_event(
-                alert_id=None,
-                user_id=user.id,
-                event_type="SAFE_WINDOW_MISSED",
-                status="SUCCESS",
-                message="Journey check-in missed — escalated to HIGH",
-                journey_id=journey_id,
-                metadata={"severity": "HIGH"},
-            )
-        except Exception as log_err:
-            logger.warning(f"Failed to log SAFE_WINDOW_MISSED: {log_err}")
-
-        # Prevent duplicate SOS alert
-        sos_existing = service_client.table("sos_alerts").select("id") \
-            .eq("safe_window_id", journey_id).eq("trigger_type", "JOURNEY_MISSED_CHECKIN").execute()
-
-        alert_data = None
-        guardian_notified = False
-        reason = "Alert already exists"
-
-        if not sos_existing.data:
-            sos_data = {
-                "user_id": user.id,
-                "trigger_type": "JOURNEY_MISSED_CHECKIN",
-                "safe_window_id": journey_id,
-                "status": "ACTIVE",
-                "location_lat": journey.get("current_latitude") or journey.get("start_latitude"),
-                "location_long": journey.get("current_longitude") or journey.get("start_longitude"),
-                "visible_message": "Journey Mode check-in missed",
-                "cancel_method": "NONE",
-            }
-            try:
-                service_client.table("sos_alerts").update({
-                    "status": "RESOLVED",
-                    "cancel_method": "AUTO_RESOLVED",
-                    "cancelled_at": now_str,
-                }).eq("user_id", user.id).eq("status", "ACTIVE").execute()
-            except Exception as resolve_err:
-                logger.warning(f"Failed to auto-resolve previous alerts: {resolve_err}")
-
-            sos_res = service_client.table("sos_alerts").insert(sos_data).execute()
-            if sos_res.data:
-                alert_data = sos_res.data[0]
-
-        # Bell notification → guardians + family with HIGH severity
-        try:
-            ward_name = _get_ward_name(service_client, user.id, user)
-            dest_label = (
-                journey.get("destination_name")
-                or journey.get("destination_address")
-                or "destination"
-            )
-            location = None
-            lat = journey.get("current_latitude") or journey.get("start_latitude")
-            lon = journey.get("current_longitude") or journey.get("start_longitude")
-            if lat and lon:
-                location = {"lat": lat, "long": lon}
-
-            _notify_safety_recipients(
-                service_client,
-                ward_id=user.id,
-                ward_name=ward_name,
-                event_type="safe_window_checkin_missed",
-                title="Missed check-in ⚠️",
-                message=f"{ward_name} missed a Safe Window check-in.",
-                metadata={
-                    "journey_id": journey_id,
-                    "ward_id": user.id,
-                    "ward_name": ward_name,
-                    "severity": "HIGH",
-                    "destination_name": dest_label,
-                    "last_known_latitude": lat,
-                    "last_known_longitude": lon,
-                    "missed_at": now_str,
-                    "alert_id": alert_data["id"] if alert_data else None,
-                },
-            )
-            guardian_notified = True
-            reason = "Success"
-        except Exception as notif_err:
-            logger.error(f"Missed-checkin notification error: {notif_err}")
-            reason = str(notif_err)
-
-        # Also use existing SMS path
-        if alert_data:
-            try:
-                notification_service.send_sos_sms_to_emergency_contacts(
-                    user_id=user.id,
-                    alert_id=alert_data["id"],
-                    alert_payload={"id": alert_data["id"], "trigger_type": "JOURNEY_MISSED_CHECKIN",
-                                   "location": location},
-                    user=user,
-                )
-                notification_service.notify_all_guardians(
-                    user_id=user.id,
-                    alert_type="JOURNEY_MISSED_CHECKIN",
-                    user=user,
-                    location=location,
-                    alert_id=alert_data["id"],
-                )
-            except Exception as sms_err:
-                logger.warning(f"SMS/guardian notify failed (non-fatal): {sms_err}")
-
-        return {
-            "success": True,
-            "safe_window": journey,
-            "alert": alert_data,
-            "guardian_notified": guardian_notified,
-            "reason": reason,
-        }
+        from app.services.journey_service import JourneyService
+        return JourneyService.escalate_journey(journey_id, user.id, reason="MISSED_CHECKIN")
     except httpx.TimeoutException:
         raise
     except httpx.RequestError:
