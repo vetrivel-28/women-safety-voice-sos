@@ -4,6 +4,7 @@
   "main": "index.ts",
   "dependencies": {
     "@gorhom/bottom-sheet": "^5.2.14",
+    "@mapbox/polyline": "^1.2.1",
     "@maplibre/maplibre-react-native": "^11.3.6",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "11.4.1",
@@ -37,6 +38,7 @@
     "@react-native-community/cli": "^20.2.0",
     "@react-native-community/cli-platform-android": "^20.2.0",
     "@react-native/metro-config": "^0.81.5",
+    "@types/mapbox__polyline": "^1.0.5",
     "@types/react": "~19.1.10",
     "typescript": "~5.9.2"
   },

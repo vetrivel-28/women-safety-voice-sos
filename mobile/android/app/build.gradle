@@ -180,3 +180,10 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+tasks.whenTaskAdded { task ->
+    if (task.name.startsWith('externalNativeBuildClean')) {
+        task.enabled = false
+    }
+}
+
