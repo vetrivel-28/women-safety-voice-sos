@@ -145,8 +145,8 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
 
   const MapComponent = MapLibreGL.Map;
   const CameraComponent = MapLibreGL.Camera;
-  const ShapeSource = MapLibreGL.ShapeSource;
-  const LineLayer = MapLibreGL.LineLayer;
+  const ShapeSource = MapLibreGL.GeoJSONSource;
+  const LineLayer = MapLibreGL.Layer;
   const MarkerComp = MapLibreGL.Marker;
 
   return (
@@ -181,9 +181,10 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
       )}
 
       {routeGeoJSON && (
-        <ShapeSource id="routeSource" shape={routeGeoJSON}>
+        <ShapeSource id="routeSource" data={routeGeoJSON}>
           <LineLayer
             id="routeFill"
+            type="line"
             style={{
               lineColor: '#4F46E5',
               lineWidth: 5,

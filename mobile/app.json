@@ -30,7 +30,12 @@
         "android.permission.BLUETOOTH_SCAN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
       ]
     },
     "web": {
@@ -40,13 +45,17 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "SafeHer uses your location to attach it to SOS alerts so your contacts know where you are."
+          "locationAlwaysAndWhenInUsePermission": "SafeHer uses your location to attach it to SOS alerts so your contacts know where you are.",
+          "isAndroidBackgroundLocationEnabled": true
         }
       ],
       [
         "expo-build-properties",
         {
-          "android": {}
+          "android": {
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36
+          }
         }
       ],
       "expo-secure-store",
