@@ -1,4 +1,5 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
+import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { EmergencyContact } from '../types';
 import { supabase } from '../lib/supabaseClient';
@@ -60,13 +61,11 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const fetchContacts = async (token: string, isRetry = false) => {
-    console.log("fetchContacts() called");
     try {
       const response = await apiClient.get('/api/contacts', {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = response.data;
-      console.log("Returned contacts:", data);
       const mappedContacts: EmergencyContact[] = data.map((item: any) => ({
         id: item.id,
         name: item.name,
@@ -134,6 +133,7 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
     } catch (e) {
       console.error('Network error adding contact', e);
+      Alert.alert('Error', 'Failed to add contact. Please check your connection and try again.');
     }
   };
 
@@ -148,6 +148,7 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
     } catch (e) {
       console.error('Network error deleting contact', e);
+      Alert.alert('Error', 'Failed to delete contact. Please try again.');
     }
   };
 
@@ -168,6 +169,7 @@ export const ContactsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
     } catch (e) {
       console.error('Network error updating contact', e);
+      Alert.alert('Error', 'Failed to update contact. Please try again.');
     }
   };
 

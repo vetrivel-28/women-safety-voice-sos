@@ -6,21 +6,14 @@ import { getMapStyleUrl } from '../../config/MapConfig';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
-// [MAP-DEBUG] Module-level: log isExpoGo and MapLibre load result once at import time
-console.log('[MAP-DEBUG] isExpoGo:', isExpoGo, '| executionEnvironment:', Constants.executionEnvironment);
-
 let MapLibreGL: any = null;
 if (!isExpoGo) {
   try {
     const mapLibreModule = require('@maplibre/maplibre-react-native');
     MapLibreGL = mapLibreModule.default ?? mapLibreModule;
-    console.log('[MAP-DEBUG] MapLibreGL loaded successfully, null?', MapLibreGL === null);
   } catch (err) {
-    // [MAP-DEBUG] Log the actual error so we know exactly why it failed
     console.warn('[MAP-DEBUG] MapLibreGL require() THREW — this is why the map is blank:', err);
   }
-} else {
-  console.log('[MAP-DEBUG] Skipped MapLibreGL require() because isExpoGo === true');
 }
 
 interface MapRouteLayerProps {
@@ -107,33 +100,7 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
     return null;
   }, [routePoints, currentLocation, startLocation, destinationLocation]);
 
-  // [MAP-DEBUG] Log every time any of the four key values change so we can see
-  // exactly what the component receives at each render during an active journey.
-  useEffect(() => {
-    const routeLen = routePoints?.length ?? 0;
-    const first = routePoints && routePoints.length > 0 ? routePoints[0] : null;
-    const last  = routePoints && routePoints.length > 0 ? routePoints[routePoints.length - 1] : null;
-    const allSame = routePoints && routePoints.length >= 2
-      ? !routePoints.some(p => p.lat !== routePoints![0].lat || p.lon !== routePoints![0].lon)
-      : false;
-    console.log(
-      '[MAP-DEBUG] props changed:',
-      '\n  routePoints.length:', routeLen,
-      '| first:', first ? `(${first.lat},${first.lon})` : 'null',
-      '| last:', last ? `(${last.lat},${last.lon})` : 'null',
-      '| allSame (would kill polyline):', allSame,
-      '\n  currentLocation:', currentLocation ? `(${currentLocation.lat},${currentLocation.lon})` : 'null',
-      '\n  destinationLocation:', destinationLocation ? `(${destinationLocation.lat},${destinationLocation.lon})` : 'null',
-      '\n  startLocation:', startLocation ? `(${startLocation.lat},${startLocation.lon})` : 'null',
-      '\n  bounds:', bounds ? `ne=${JSON.stringify(bounds.ne)} sw=${JSON.stringify(bounds.sw)}` : 'null',
-      '\n  routeGeoJSON is null?:', routeGeoJSON === null
-    );
-  }, [routePoints, currentLocation, destinationLocation, startLocation, bounds, routeGeoJSON]);
-
-  // [MAP-DEBUG] Log at the guard point so we know whether we're returning the
-  // fallback view (blank screen) or proceeding to render the real map.
   if (isExpoGo || !MapLibreGL) {
-    console.log('[MAP-DEBUG] RETURNING FALLBACK VIEW — isExpoGo:', isExpoGo, '| MapLibreGL null:', MapLibreGL === null);
     return (
       <View style={styles.fallback}>
         <Text>MapLibre requires a native build.</Text>
@@ -141,12 +108,10 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
     );
   }
 
-  console.log('[MAP-DEBUG] Rendering real MapLibre map — mapStyleId:', mapStyleId);
-
   const MapComponent = MapLibreGL.Map;
   const CameraComponent = MapLibreGL.Camera;
-  const ShapeSource = MapLibreGL.GeoJSONSource;
-  const LineLayer = MapLibreGL.Layer;
+  const ShapeSource = MapLibreGL.ShapeSource;
+  const LineLayer = MapLibreGL.LineLayer;
   const MarkerComp = MapLibreGL.Marker;
 
   return (
@@ -181,10 +146,9 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
       )}
 
       {routeGeoJSON && (
-        <ShapeSource id="routeSource" data={routeGeoJSON}>
+        <ShapeSource id="routeSource" shape={routeGeoJSON}>
           <LineLayer
             id="routeFill"
-            type="line"
             style={{
               lineColor: '#4F46E5',
               lineWidth: 5,
@@ -192,17 +156,25 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
               lineJoin: 'round'
             }}
           />
-        </ShapeSource>
+        </GeoJSONSource>
+      )}
+
+      {startLocation && (
+        <MarkerComp id="startLocation" lngLat={[startLocation.lon, startLocation.lat]} anchor="center">
+          <View style={[styles.currentLocMarker, { borderColor: '#10B981', backgroundColor: 'rgba(16, 185, 129, 0.2)' }]}>
+            <View style={[styles.currentLocInner, { backgroundColor: '#10B981' }]} />
+          </View>
+        </MarkerComp>
       )}
 
       {destinationLocation && (
-        <MarkerComp id="destination" coordinate={[destinationLocation.lon, destinationLocation.lat]} anchor={{x: 0.5, y: 1}}>
+        <MarkerComp id="destination" lngLat={[destinationLocation.lon, destinationLocation.lat]} anchor="bottom">
           <Text style={{ fontSize: 32 }}>📍</Text>
         </MarkerComp>
       )}
 
       {currentLocation && (
-        <MarkerComp id="currentLocation" coordinate={[currentLocation.lon, currentLocation.lat]} anchor={{x: 0.5, y: 0.5}}>
+        <MarkerComp id="currentLocation" lngLat={[currentLocation.lon, currentLocation.lat]} anchor="center">
           <View style={styles.currentLocMarker}>
             <View style={styles.currentLocInner} />
           </View>

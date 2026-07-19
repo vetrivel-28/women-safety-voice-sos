@@ -24,7 +24,6 @@ if (!isExpoGo) {
     mapLibreLoadedInitial = hasMap && hasCamera;
   } catch (err: any) {
     mapLibreLoadedInitial = false;
-    console.log('[MAP RUNTIME] mapLibre error =', err?.message ?? String(err));
   }
 }
 

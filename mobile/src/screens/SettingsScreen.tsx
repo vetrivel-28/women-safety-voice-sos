@@ -48,7 +48,6 @@ export const SettingsScreen: React.FC = () => {
   }, []);
 
   const fetchProfile = async () => {
-    console.log("fetchProfile() called");
     setIsLoadingProfile(true);
     addLog('--- FETCH PROFILE START ---');
 
@@ -57,8 +56,6 @@ export const SettingsScreen: React.FC = () => {
       addLog(`-> GET STATUS: ${response.status}`);
 
       const parsed = response.data;
-      console.log("Profile API Response:", response);
-      console.log("Profile JSON:", parsed);
       if (parsed) {
         setOriginalProfile(parsed);
         setName(parsed.name || '');

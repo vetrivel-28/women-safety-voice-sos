@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
-console.log('[NAV] AppNavigator loaded');
-import { Text } from 'react-native';
+import { Text, View, ActivityIndicator } from 'react-native';
 import * as Linking from 'expo-linking';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -124,6 +123,7 @@ export const AppNavigator = () => {
           checkProfile(session);
         } else {
           setProfileStatus(null);
+          setLoading(false);
         }
       }
     });
@@ -173,7 +173,11 @@ export const AppNavigator = () => {
   }, []);
 
   if (loading) {
-    return null; 
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FAFAF9' }}>
+        <ActivityIndicator size="large" color="#EF4444" />
+      </View>
+    ); 
   }
 
   return (

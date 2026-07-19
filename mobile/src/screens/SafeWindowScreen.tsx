@@ -152,7 +152,7 @@ export const SafeWindowScreen: React.FC = () => {
     if (useCurrentLocation) {
       const locData = await getCurrentLocationForAlert(true);
       if (locData && !locData.permissionDenied) {
-        reverseGeocode(locData.latitude, locData.longitude).catch(() => {});
+        reverseGeocode(locData.latitude, locData.longitude).catch((e) => console.warn('[SafeWindow] Reverse geocode failed', e));
         startLoc = { latitude: locData.latitude, longitude: locData.longitude, address: "Current Location" };
         if (!isWithinTamilNadu(locData.latitude, locData.longitude)) {
           Alert.alert('Location Warning', 'Your current GPS location appears to be outside Tamil Nadu.');

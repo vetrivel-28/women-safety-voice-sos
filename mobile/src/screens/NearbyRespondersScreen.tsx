@@ -36,7 +36,6 @@ export default function NearbyRespondersScreen() {
 
     try {
       const res = await apiClient.get(`/api/family/${family.id}/nearby-responders`);
-      console.log('[NEARBY RESPONDERS RESPONSE] =', JSON.stringify(res.data));
       setNearbyResponders(res.data);
     } catch (e: any) {
       if (e.name !== 'CanceledError') {

@@ -1,3 +1,4 @@
+-- EVIDENCE STEP 1: 29_remove_trigger_exception.sql
 -- Migration 29: Make handle_new_user strictly atomic
 -- Removes the EXCEPTION WHEN OTHERS block so that profile creation failures
 -- roll back the entire auth.users insert transaction.

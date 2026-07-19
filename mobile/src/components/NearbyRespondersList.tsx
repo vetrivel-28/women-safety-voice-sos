@@ -3,14 +3,6 @@ import { View, Text, StyleSheet } from 'react-native';
 import { BottomSheetFlatList } from '@gorhom/bottom-sheet';
 
 export const NearbyRespondersList = ({ responders, loading, sharingEnabled }: any) => {
-  useEffect(() => {
-    if (responders) {
-      console.log(`[NearbyRespondersList] API member count: ${responders.length}`);
-      console.log(`[NearbyRespondersList] transformed member count: ${responders.length}`);
-      console.log(`[NearbyRespondersList] rendered member IDs:`, responders.map((r: any) => r.user_id));
-    }
-  }, [responders]);
-
   if (!sharingEnabled) {
     return (
       <View style={styles.emptyContainer}>

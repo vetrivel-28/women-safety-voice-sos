@@ -65,7 +65,7 @@ export default function LoginScreen() {
       });
       
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
+        const errData = await response.json().catch((e) => { console.warn('[Login] Failed to parse error response', e); return {}; });
         throw new Error(errData.detail || 'Failed to sign up');
       }
       

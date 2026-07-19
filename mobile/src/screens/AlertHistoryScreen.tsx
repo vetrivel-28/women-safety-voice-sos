@@ -27,7 +27,7 @@ export const AlertHistoryScreen: React.FC = () => {
     try {
       await retryPendingAlerts();
     } catch (e) {
-      console.log('Retry failed', e);
+      console.warn('Retry failed', e);
     }
   };
 

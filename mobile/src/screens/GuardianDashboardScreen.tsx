@@ -104,18 +104,6 @@ export const GuardianDashboardScreen: React.FC = () => {
                 key={`person-${person.protectedUserId}`}
                 style={styles.squareTile}
                 onPress={() => {
-                  console.log('[GUARDIAN TILE RAW]', JSON.stringify(person, null, 2));
-                  console.log('[GUARDIAN TILE IDS]', {
-                    protectedUserId: person.protectedUserId,
-                    protected_user_id: (person as any).protected_user_id,
-                    user_id: (person as any).user_id,
-                    id: (person as any).id,
-                  });
-                  console.log('[OPEN PROTECTED PERSON PARAMS]', {
-                    protectedUserId: person.protectedUserId,
-                    name: person.name,
-                    status: person.status,
-                  });
                   navigation.navigate("GuardianPersonDetail", { protectedUserId: person.protectedUserId, name: person.name, status: person.status });
                 }}
               >

@@ -97,10 +97,9 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const fetchInFlightRef = useRef(false);
 
   const fetchDashboard = async (overrideSession?: any) => {
-    console.log("fetchDashboard() called");
     // Prevent concurrent fetches
-    if (fetchInFlightRef.current) { console.log("[RACE DEBUG] fetchDashboard ignored because fetchInFlightRef is true! caller context needed"); return; }
-    console.log("[RACE DEBUG] fetchInFlightRef set to TRUE"); fetchInFlightRef.current = true;
+    if (fetchInFlightRef.current) { return; }
+    fetchInFlightRef.current = true;
     try {
       setLoading(true);
       let session = overrideSession;
@@ -116,7 +115,6 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       // Single backend call gives us: null | {status:'pending',...} | active membership
       const response = await apiClient.get('/api/family/my/current');
-      console.log("Dashboard response:", response.data);
       const payload = response.data;
 
       // ── Case 1: no family, no pending request ──────────────────────────────
@@ -190,7 +188,7 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     } finally {
       setLoading(false);
-      console.log("[RACE DEBUG] fetchInFlightRef set to FALSE"); fetchInFlightRef.current = false;
+      fetchInFlightRef.current = false;
     }
   };
 
@@ -205,7 +203,7 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     currentFamilyIdRef.current = null;
     setLoading(false);
     setIsSharingEnabled(false);
-    console.log("[RACE DEBUG] fetchInFlightRef set to FALSE"); fetchInFlightRef.current = false;
+    fetchInFlightRef.current = false;
   };
 
   const hydrateLocationSharing = async (session: any, famId: string | null) => {
@@ -264,9 +262,6 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const newUserId = session?.user?.id ?? null;
       const oldUserId = currentUserIdRef.current;
 
-      console.log('[AUTH USER CHANGE] oldUserId =', oldUserId);
-      console.log('[AUTH USER CHANGE] newUserId =', newUserId);
-
       if (newUserId !== oldUserId) {
         currentUserIdRef.current = newUserId;
 
@@ -277,11 +272,9 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
 
         // Unconditionally clear all family state before fetching for new user
-        console.log('[FAMILY STATE RESET] reason = auth_user_change');
         clearState();
 
         if (newUserId) {
-          console.log('[FAMILY CURRENT FETCH] userId =', newUserId);
           fetchDashboard(session);
         }
       }
@@ -291,7 +284,6 @@ export const FamilyProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     supabase.auth.getSession().then(({ data }) => {
       const userId = data?.session?.user?.id ?? null;
       currentUserIdRef.current = userId;
-      console.log('[FAMILY CURRENT FETCH] userId =', userId);
       fetchDashboard();
     });
 

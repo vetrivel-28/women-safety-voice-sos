@@ -83,11 +83,13 @@ async def httpx_request_error_handler(request: Request, exc: httpx.RequestError)
         content={"detail": "Temporary backend data service unavailable. Please retry."}
     )
 
-# Configure CORS
+# Configure CORS — mobile-only API; no legitimate cross-origin browser callers.
+# allow_credentials=False + empty origins prevents browser credential-stealing attacks
+# while still allowing simple (non-credentialed) preflight from monitoring/health-check tools.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For demo purposes
-    allow_credentials=True,
+    allow_origins=[],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

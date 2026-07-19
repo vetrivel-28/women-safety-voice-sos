@@ -155,8 +155,8 @@ export const useGuardianDashboard = () => {
             if (e.isNetworkError) isNetworkError = true;
             return { data: null, error: e };
           }),
-          apiClient.get('/api/guardians/alerts?active_only=true', { signal }).catch(() => ({ data: [] })),
-          apiClient.get('/api/guardians/safe-windows?active_only=true', { signal }).catch(() => ({ data: [] }))
+          apiClient.get('/api/guardians/alerts?active_only=true', { signal }).catch((e) => { console.warn('[GuardianDashboard] Alerts fetch failed, using empty fallback', e); return { data: [] }; }),
+          apiClient.get('/api/guardians/safe-windows?active_only=true', { signal }).catch((e) => { console.warn('[GuardianDashboard] Safe-windows fetch failed, using empty fallback', e); return { data: [] }; })
         ]);
 
         const rawDashboard = dashboardRes.data || [];
@@ -277,7 +277,7 @@ export const useGuardianDashboard = () => {
         
         const timeSinceLastFetch = Date.now() - globalCache.timestamp;
         if (timeSinceLastFetch >= currentInterval) {
-          await fetchDashboardData(true, abortController.signal).catch(() => {});
+          await fetchDashboardData(true, abortController.signal).catch((e) => console.warn('[GuardianDashboard] Poll fetch failed', e));
         }
 
         if (isActive) {
@@ -308,7 +308,7 @@ export const useGuardianDashboard = () => {
       if (nextAppState === 'active' && isFocusedRef.current) {
         const timeSinceLastFetch = Date.now() - globalCache.timestamp;
         if (timeSinceLastFetch >= 5000) {
-          fetchDashboardData(true).catch(() => {});
+          fetchDashboardData(true).catch((e) => console.warn('[GuardianDashboard] AppState resume fetch failed', e));
         }
       }
     });

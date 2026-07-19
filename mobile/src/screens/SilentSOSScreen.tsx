@@ -64,7 +64,6 @@ export const SilentSOSScreen: React.FC = () => {
             setLocationStatus('Failed to send alert');
           }
         }).catch(error => {
-          console.log("SILENT_SOS_SCREEN: error =", error);
         });
       }
     }

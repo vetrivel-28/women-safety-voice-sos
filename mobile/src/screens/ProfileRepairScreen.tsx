@@ -56,7 +56,7 @@ export default function ProfileRepairScreen() {
       </Text>
       
       <Text style={{ fontSize: 16, textAlign: 'center', color: '#475569', marginBottom: 32 }}>
-        Your account was created but your safety profile could not be generated. This is usually due to a temporary network issue.
+        There was an issue loading your profile. This is usually due to a temporary network issue, or your safety profile could not be generated during signup.
       </Text>
 
       {errorMsg && (

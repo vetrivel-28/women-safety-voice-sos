@@ -293,10 +293,6 @@ async def update_profile(
     except HTTPException:
         raise
 
-    # -----------------------------------------------------
-    # TEMPORARY DIAGNOSTIC ERROR HANDLING
-    # Shows exact Supabase/PostgreSQL error
-    # -----------------------------------------------------
     except Exception as e:
         user_id_for_log = (
             user["user"].id
@@ -304,23 +300,14 @@ async def update_profile(
             else "Unknown"
         )
 
-        error_type = type(e).__name__
-        error_message = str(e)
-
         logger.exception(
             "PROFILE_UPDATE_ERROR user=%s type=%s message=%s",
             user_id_for_log,
-            error_type,
-            error_message,
+            type(e).__name__,
+            str(e),
         )
 
-        # TEMPORARY DEBUG RESPONSE
-        # Remove detailed message after diagnosis.
         raise HTTPException(
             status_code=503,
-            detail={
-                "error": "Profile update failed",
-                "type": error_type,
-                "message": error_message,
-            },
+            detail="Profile service temporarily unavailable"
         )

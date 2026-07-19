@@ -102,7 +102,6 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       // Intentionally omitting raw console logs for production
     });
     const stateSub = audioEmitter.addListener('onVoiceMonitoringState', (event: any) => {
-      console.log(`[SafeHerAudioPOC] State changed: ${event.state}`);
       if (event.state === 'MIC_START_FAILED') {
         // Here we could handle UI contextually, but importantly, do not crash Location
         console.warn("[SafeHerAudioPOC] Mic FGS failed to start, falling back to location only.");
@@ -165,13 +164,11 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     if (!session || restoreInFlightRef.current) return;
     restoreInFlightRef.current = true;
     try {
-      console.log(`[DEBUG] GET /api/journeys executing for user: ${session.user?.id}`);
       const response = await apiClient.get('/api/journeys');
       const journeys = response.data;
       const active = journeys.find((j: any) => j.status === 'active');
 
       if (active) {
-        console.log(`[DEBUG] Restoring journey created by user: ${active.user_id}`);
         // Legacy fallback
         const now = new Date();
         const durationSecs = active.duration_seconds || (active.duration_minutes ? active.duration_minutes * 60 : 1800);
@@ -390,8 +387,6 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       let initialRoute: { lat: number, lon: number }[] = [];
       if (actualStartLoc && actualStartLoc.latitude && actualStartLoc.longitude && destLoc && destLoc.latitude && destLoc.longitude) {
         initialRoute = [{ lat: actualStartLoc.latitude, lon: actualStartLoc.longitude }, { lat: destLoc.latitude, lon: destLoc.longitude }];
-      } else {
-        console.log('[MAP-DEBUG] startSafeWindow: no destination set — initialRoute is [] (no polyline will render)');
       }
 
       let journeyData: any;
@@ -419,10 +414,8 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           })
         };
 
-        console.log("[SafeWindowStart] payload:", payload);
         const response = await apiClient.post('/api/journeys', payload);
         journeyData = response.data;
-        console.log("[SafeWindowStart] response:", journeyData);
       } catch (e: any) {
         console.warn("Could not sync journey start to backend", e);
         console.error("[SafeWindowStart] failed:", e.response?.status, e.response?.data);
@@ -480,7 +473,6 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         try {
           const decoded = polyline.decode(journeyData.route_polyline);
           parsedRoute = decoded.map((coord: number[]) => ({ lat: coord[0], lon: coord[1] }));
-          console.log('[MAP-DEBUG] Successfully decoded backend route_polyline with', parsedRoute.length, 'points');
         } catch (e) {
           console.warn('[MAP-DEBUG] Failed to decode backend route_polyline, falling back to straight line', e);
         }
@@ -752,6 +744,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             try {
               loc = JSON.parse(payloadStr);
             } catch(e) {
+              console.warn('[SafeWindowContext] Failed to parse native location payload', e);
               return;
             }
 

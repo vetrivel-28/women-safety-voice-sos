@@ -16,11 +16,6 @@ import { NearbyRespondersList } from '../components/NearbyRespondersList';
 import { useMapProvider } from '../context/MapContext';
 import { getMapStyleUrl } from '../config/MapConfig';
 
-// Debug logs for APK gating issue
-console.log('[MAP RUNTIME] appOwnership =', Constants.appOwnership);
-console.log('[MAP RUNTIME] executionEnvironment =', Constants.executionEnvironment);
-console.log('[PHASE4 BUILD MARKER] phase4-final-startup-v2-mapfix');
-
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 const SHARING_PREF_KEY = '@safeher_location_sharing_enabled';
@@ -60,7 +55,6 @@ const formatTime = (dateString: string) => {
 };
 
 export default function FamilyLiveMapScreen() {
-  console.log('[FAMILY MAP BUILD MARKER] family-map-maplibre-final-v1');
   const { family, refresh } = useFamily();
   const [locations, setLocations] = useState<FamilyMemberLocation[]>([]);
   const [mapZoom, setMapZoom] = useState(17);
@@ -120,7 +114,7 @@ export default function FamilyLiveMapScreen() {
           }
         }
       } catch (e) {
-        // Fallback to default
+        console.warn('[FamilyMap] Failed to get initial GPS location, using default center', e);
       }
     };
     initLocation();
@@ -138,15 +132,11 @@ export default function FamilyLiveMapScreen() {
       const newUserId = session?.user?.id ?? null;
       const oldUserId = currentUserIdRef.current;
 
-      console.log('[AUTH USER CHANGE] oldUserId =', oldUserId);
-      console.log('[AUTH USER CHANGE] newUserId =', newUserId);
-
       if (newUserId !== oldUserId) {
         currentUserIdRef.current = newUserId;
         setMyUserId(newUserId);
         
         // Clear map state on user change
-        console.log('[FAMILY STATE RESET] reason = auth_user_change_map');
         setLocations([]);
         setErrorMsg(null);
         setLoading(true);
@@ -170,11 +160,9 @@ export default function FamilyLiveMapScreen() {
       
       // Clear old locations when familyId changes
       if (oldFamilyId !== null) {
-        console.log('[FAMILY STATE RESET] reason = family_id_change_map');
         setLocations([]);
         setErrorMsg(null);
         setLoading(true);
-        console.log('[SAFETY SUMMARY RESET] reason = family_id_change');
         setSafetySummary(null);
         setNearbyRespondersData(null);
       }
@@ -209,7 +197,6 @@ export default function FamilyLiveMapScreen() {
   const fetchSafetySummary = async () => {
     if (!family) return;
     const userId = currentUserIdRef.current;
-    console.log('[SAFETY SUMMARY FETCH] userId =', userId);
     
     // Cancel previous request
     if (safetySummaryAbortRef.current) {
@@ -222,7 +209,6 @@ export default function FamilyLiveMapScreen() {
     setSummaryLoading(true);
     try {
       const res = await apiClient.get('/api/safety/summary');
-      console.log('[SAFETY SUMMARY RESPONSE] =', JSON.stringify(res.data));
       setSafetySummary(res.data);
     } catch (e: any) {
       if (e.name !== 'CanceledError') {
@@ -263,7 +249,6 @@ export default function FamilyLiveMapScreen() {
     const channel = supabase
       .channel('family_locations_updates')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'family_member_locations', filter: `family_id=eq.${family.id}` }, (payload) => {
-        console.log('[FAMILY MAP] family_member_locations changed via Realtime:', payload.eventType);
         
         let needsFetch = false;
         setLocations(currentLocations => {
@@ -299,7 +284,6 @@ export default function FamilyLiveMapScreen() {
       })
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
-          console.log('[FAMILY MAP] Subscribed! Fetching initial state...');
           fetchLocations(myUserId);
           fetchNearbyResponders();
         }
@@ -364,9 +348,6 @@ export default function FamilyLiveMapScreen() {
     // for the sharing_enabled sync so the user's explicit intent wins.
     const fetchStartTime = Date.now();
 
-    console.log('[FAMILY LIVE MAP FETCH] userId =', userId);
-    console.log('[FAMILY LIVE MAP FETCH] familyId =', familyId);
-
     // Prevent concurrent fetches
     if (fetchInFlightRef.current) return;
     fetchInFlightRef.current = true;
@@ -376,7 +357,7 @@ export default function FamilyLiveMapScreen() {
       const data = await familyLocationsApi.getLocations(familyId);
       
       // Guard against stale responses - only update if familyId hasn't changed
-      if (currentFamilyIdRef.current === familyId && currentUserIdRef.current === userId) {
+      if (currentFamilyIdRef.current === familyId) {
         // Attach the fetch start time so the sync useEffect can compare it
         // against the last toggle timestamp.
         (data as any).__fetchStartTime = fetchStartTime;
@@ -388,11 +369,7 @@ export default function FamilyLiveMapScreen() {
       
       // Handle 403 - stale family state (user switched accounts)
       if (e?.response?.status === 403) {
-        console.log('[FAMILY LIVE MAP 403] staleFamilyId =', familyId);
-        console.log('[FAMILY LIVE MAP 403] action = reset_and_refetch');
-        
         // Reset stale family state
-        console.log('[FAMILY STATE RESET] reason = 403_stale_family');
         setLocations([]);
         setErrorMsg(null);
         setLoading(true);
@@ -439,7 +416,7 @@ export default function FamilyLiveMapScreen() {
     toggleTimestampRef.current = Date.now();
     setSharingEnabled(val);
     // Persist the preference so it survives navigation and app restart.
-    AsyncStorage.setItem(SHARING_PREF_KEY, val ? 'true' : 'false').catch(() => {});
+    AsyncStorage.setItem(SHARING_PREF_KEY, val ? 'true' : 'false').catch((e) => console.warn('[FamilyMap] Failed to persist sharing preference', e));
     try {
       await familyLocationsApi.toggleSharing(val);
       if (val) {
@@ -449,7 +426,7 @@ export default function FamilyLiveMapScreen() {
     } catch (e) {
       Alert.alert('Error', 'Could not update sharing preference.');
       setSharingEnabled(!val);
-      AsyncStorage.setItem(SHARING_PREF_KEY, val ? 'false' : 'true').catch(() => {});
+      AsyncStorage.setItem(SHARING_PREF_KEY, val ? 'false' : 'true').catch((e) => console.warn('[FamilyMap] Failed to revert sharing preference', e));
     }
   };
 
@@ -458,7 +435,6 @@ export default function FamilyLiveMapScreen() {
       // Not imperative anymore, map uses centerCoordinate passed via props, but wait...
       // MapLibreRenderer doesn't currently support setting center via tapping because centerCoordinate is derived from plottableLocs array!
       // In this audit, we will just snap bottom sheet for now since center is locked to user.
-      console.log('[MAP] Centering on member logic requires overriding derived center state. Left as future enhancement:', member.profiles?.full_name);
     }
     bottomSheetRef.current?.snapToIndex(0); // Collapse sheet after selection
   }, []);
@@ -627,7 +603,7 @@ export default function FamilyLiveMapScreen() {
                   setMapZoom(17);
                   setDefaultCenterCoordinate(center); // triggers re-render to apply new camera
                 }
-              } catch (_) {}
+              } catch (e) { console.warn('[FamilyMap] Failed to get current location for re-center', e); }
             }}
           >
             <Text style={styles.myLocationButtonText}>◎</Text>
