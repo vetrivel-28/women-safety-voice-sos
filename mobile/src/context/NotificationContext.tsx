@@ -89,7 +89,27 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 15000); // Poll every 15s
+    
+    let channel: any;
+    
+    const setupRealtime = async () => {
+      const { data: { session } } = await import('../lib/supabaseClient').then(m => m.supabase.auth.getSession());
+      if (session?.user?.id) {
+        const { supabase } = await import('../lib/supabaseClient');
+        channel = supabase.channel('app_notifications_channel')
+          .on('postgres_changes', { 
+            event: 'INSERT', 
+            schema: 'public', 
+            table: 'app_notifications', 
+            filter: `user_id=eq.${session.user.id}` 
+          }, () => {
+            fetchNotifications();
+          })
+          .subscribe();
+      }
+    };
+    
+    setupRealtime();
 
     const handleAppStateChange = (nextAppState: AppStateStatus) => {
       if (nextAppState === 'active') {
@@ -99,7 +119,9 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const subscription = AppState.addEventListener('change', handleAppStateChange);
 
     return () => {
-      clearInterval(interval);
+      if (channel) {
+        import('../lib/supabaseClient').then(m => m.supabase.removeChannel(channel));
+      }
       subscription.remove();
     };
   }, []);

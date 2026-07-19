@@ -28,11 +28,13 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
   const { type, initialLocation } = route.params;
   const { mapStyleId } = useMapProvider();
   
-  const [centerCoord, setCenterCoord] = useState<[number, number] | null>(
+  const [cameraCoord, setCameraCoord] = useState<[number, number] | null>(
     initialLocation && initialLocation.longitude && initialLocation.latitude
       ? [initialLocation.longitude, initialLocation.latitude]
       : null
   );
+  
+  const [selectedCoord, setSelectedCoord] = useState<[number, number] | null>(cameraCoord);
   
   const [address, setAddress] = useState<string>('Loading address...');
   const [isFetchingAddress, setIsFetchingAddress] = useState(false);
@@ -44,6 +46,7 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
   const mapRef = useRef<any>(null);
   const cameraRef = useRef<any>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (!initialLocation || !initialLocation.latitude || !initialLocation.longitude) {
@@ -55,21 +58,25 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
           const lastLoc = await getLastKnownLocation();
           if (lastLoc && !lastLoc.permissionDenied && lastLoc.latitude && lastLoc.longitude) {
             bestCoords = [lastLoc.longitude, lastLoc.latitude];
-            setCenterCoord(bestCoords);
+            setCameraCoord(bestCoords);
+            setSelectedCoord(bestCoords);
           }
           
           const gpsLoc = await getCurrentLocationForAlert(true);
           if (gpsLoc && !gpsLoc.permissionDenied && gpsLoc.latitude && gpsLoc.longitude) {
             bestCoords = [gpsLoc.longitude, gpsLoc.latitude];
-            setCenterCoord(bestCoords);
+            setCameraCoord(bestCoords);
+            setSelectedCoord(bestCoords);
             updateAddress(gpsLoc.latitude, gpsLoc.longitude);
           } else {
             // If GPS fails, still try to update address with whatever we have
-            setCenterCoord(bestCoords);
+            setCameraCoord(bestCoords);
+            setSelectedCoord(bestCoords);
             updateAddress(bestCoords[1], bestCoords[0]);
           }
         } catch (e) {
-          setCenterCoord(bestCoords);
+          setCameraCoord(bestCoords);
+          setSelectedCoord(bestCoords);
           updateAddress(bestCoords[1], bestCoords[0]);
         }
       };
@@ -80,6 +87,7 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
     }
     return () => {
       if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+      if (debounceTimeoutRef.current) clearTimeout(debounceTimeoutRef.current);
     };
   }, []);
 
@@ -89,7 +97,7 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
       const addr = await reverseGeocode(lat, lon);
       setAddress(addr);
     } catch (e) {
-      setAddress('Address unavailable');
+      setAddress(`${lat.toFixed(6)}, ${lon.toFixed(6)}`);
     } finally {
       setIsFetchingAddress(false);
     }
@@ -99,8 +107,16 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
     // MapLibre onRegionDidChange payload -> event.geometry.coordinates -> [lon, lat]
     if (event && event.geometry && event.geometry.coordinates) {
       const coords = event.geometry.coordinates;
-      setCenterCoord(coords as [number, number]);
-      updateAddress(coords[1], coords[0]);
+      setSelectedCoord(coords as [number, number]);
+      
+      // Debounce the reverse geocoding to prevent API spam while panning
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+      
+      debounceTimeoutRef.current = setTimeout(() => {
+        updateAddress(coords[1], coords[0]);
+      }, 400);
     }
   };
 
@@ -141,7 +157,8 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
 
     if (lat && lon) {
       const coords: [number, number] = [lon, lat];
-      setCenterCoord(coords);
+      setCameraCoord(coords);
+      setSelectedCoord(coords);
       setAddress(place.name);
       setSearchQuery('');
       setSearchResults([]);
@@ -151,15 +168,21 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
   };
 
   const handleConfirm = () => {
-    if (!centerCoord) return;
+    if (!selectedCoord) return;
+    
+    // Fallback if address is still fetching or fails
+    const finalAddress = isFetchingAddress || address === 'Loading address...' || address === 'Address unavailable'
+      ? `${selectedCoord[1].toFixed(6)}, ${selectedCoord[0].toFixed(6)}`
+      : address;
+      
     navigation.navigate({
       name: 'SafeWindow',
       params: {
         pickedLocation: {
           type,
-          latitude: centerCoord[1],
-          longitude: centerCoord[0],
-          address
+          latitude: selectedCoord[1],
+          longitude: selectedCoord[0],
+          address: finalAddress
         }
       },
       merge: true
@@ -209,7 +232,7 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
       )}
 
       <View style={styles.mapContainer}>
-        {centerCoord && (
+        {cameraCoord && (
           <MapComponent
             ref={mapRef}
             style={StyleSheet.absoluteFillObject}
@@ -219,7 +242,7 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
           >
             <CameraComponent
               ref={cameraRef}
-              center={centerCoord}
+              center={cameraCoord}
               zoom={15}
               duration={1000}
               easing="fly"
@@ -236,8 +259,9 @@ export default function LocationPickerScreen({ route, navigation }: Props) {
       <View style={styles.footer}>
         <Text style={styles.addressLabel}>Selected Location:</Text>
         <Text style={styles.addressText} numberOfLines={2}>
-          {isFetchingAddress ? 'Loading...' : address}
+          {isFetchingAddress ? 'Loading address...' : address}
         </Text>
+        {/* We do NOT block the confirm button. Selected coordinates are source of truth. */}
         <PrimaryButton title="Confirm Location" onPress={handleConfirm} style={styles.confirmBtn} />
       </View>
     </SafeAreaView>

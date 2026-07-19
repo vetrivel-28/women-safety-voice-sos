@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo, useEffect, useState, useRef } from 'react';
 import { StyleSheet, View, Text } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useMapProvider } from '../../context/MapContext';
@@ -12,7 +12,7 @@ if (!isExpoGo) {
     const mapLibreModule = require('@maplibre/maplibre-react-native');
     MapLibreGL = mapLibreModule.default ?? mapLibreModule;
   } catch (err) {
-    console.warn('[MAP-DEBUG] MapLibreGL require() THREW — this is why the map is blank:', err);
+    console.warn('[MAP-DEBUG] MapLibreGL require() THREW:', err);
   }
 }
 
@@ -26,93 +26,164 @@ interface MapRouteLayerProps {
 export default function MapRouteLayer({ routePoints, currentLocation, startLocation, destinationLocation }: MapRouteLayerProps) {
   const { mapStyleId } = useMapProvider();
 
-  const routeGeoJSON = useMemo(() => {
-    if (!routePoints || routePoints.length < 2) return null;
-    
-    // Check if all points are identical (crashes MapLibre)
-    const first = routePoints[0];
-    const hasDifferentPoint = routePoints.some(p => p.lat !== first.lat || p.lon !== first.lon);
-    if (!hasDifferentPoint) return null;
+  // ── Smooth marker animation ───────────────────────────────────────────────
+  const [animatedLoc, setAnimatedLoc] = useState<{lat: number, lon: number} | null>(null);
+  // Track whether we've ever received a real GPS fix
+  const hasReceivedFix = useRef(false);
+  // Track whether the camera has been seeded with initial bounds
+  const cameraModeRef = useRef<'bounds' | 'follow'>('bounds');
 
-    return {
-      type: 'FeatureCollection',
-      features: [
-        {
-          type: 'Feature',
-          properties: {},
-          geometry: {
-            type: 'LineString',
-            coordinates: routePoints.map(p => [p.lon, p.lat])
-          }
-        }
-      ]
+  useEffect(() => {
+    if (!currentLocation) return;
+
+    // First fix: snap immediately, no animation
+    if (!hasReceivedFix.current) {
+      hasReceivedFix.current = true;
+      cameraModeRef.current = 'follow';
+      setAnimatedLoc(currentLocation);
+      return;
+    }
+
+    const startLoc = animatedLoc ?? currentLocation;
+    const endLoc = currentLocation;
+
+    // Snap immediately if too large (teleport) or identical
+    const dlat = endLoc.lat - startLoc.lat;
+    const dlon = endLoc.lon - startLoc.lon;
+    const dist = Math.sqrt(dlat * dlat + dlon * dlon);
+    if (dist < 0.000001 || dist > 0.01) {
+      setAnimatedLoc(endLoc);
+      return;
+    }
+
+    // Cubic ease-out interpolation over 1 second
+    let startTime = 0;
+    const duration = 1000;
+    const animate = (time: number) => {
+      if (!startTime) startTime = time;
+      const progress = Math.min((time - startTime) / duration, 1);
+      const ease = 1 - Math.pow(1 - progress, 3);
+      setAnimatedLoc({
+        lat: startLoc.lat + dlat * ease,
+        lon: startLoc.lon + dlon * ease,
+      });
+      if (progress < 1) requestAnimationFrame(animate);
     };
-  }, [routePoints]);
+    const rafId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafId);
+  }, [currentLocation]);
 
-  const bounds = useMemo(() => {
-    // Priority 1: fit to the full route polyline
+  // ── Route splitting: travelled (grey) vs remaining (indigo) ──────────────
+  const [travelledRoute, remainingRoute] = useMemo(() => {
+    if (!routePoints || routePoints.length < 2) return [null, null];
+    const first = routePoints[0];
+    if (!routePoints.some(p => p.lat !== first.lat || p.lon !== first.lon)) return [null, null];
+
+    const makeGeoJSON = (points: {lat: number, lon: number}[]) => ({
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature', properties: {},
+        geometry: { type: 'LineString', coordinates: points.map(p => [p.lon, p.lat]) }
+      }]
+    });
+
+    if (!animatedLoc) return [null, makeGeoJSON(routePoints)];
+
+    let minIndex = 0;
+    let minDist = Infinity;
+    for (let i = 0; i < routePoints.length; i++) {
+      const dx = routePoints[i].lon - animatedLoc.lon;
+      const dy = routePoints[i].lat - animatedLoc.lat;
+      const d = dx * dx + dy * dy;
+      if (d < minDist) { minDist = d; minIndex = i; }
+    }
+
+    const travelled = routePoints.slice(0, minIndex + 1);
+    const remaining = routePoints.slice(minIndex);
+    return [
+      travelled.length > 1 ? makeGeoJSON(travelled) : null,
+      remaining.length > 1 ? makeGeoJSON(remaining) : null,
+    ];
+  }, [routePoints, animatedLoc]);
+
+  // ── Camera: initial bounds → follow user once GPS fix arrives ────────────
+  const initialBounds = useMemo(() => {
+    // Priority 1: full route
     if (routePoints && routePoints.length > 0) {
       const lats = routePoints.map(p => p.lat);
       const lons = routePoints.map(p => p.lon);
-      const maxLat = Math.max(...lats);
-      const minLat = Math.min(...lats);
-      const maxLon = Math.max(...lons);
-      const minLon = Math.min(...lons);
-
-      // MapLibre Camera bounds crash if ne === sw (zero area)
+      const maxLat = Math.max(...lats), minLat = Math.min(...lats);
+      const maxLon = Math.max(...lons), minLon = Math.min(...lons);
       if (maxLat === minLat && maxLon === minLon) {
-        return {
-          ne: [maxLon + 0.01, maxLat + 0.01],
-          sw: [minLon - 0.01, minLat - 0.01]
-        };
+        return { ne: [maxLon + 0.01, maxLat + 0.01], sw: [minLon - 0.01, minLat - 0.01] };
       }
       return { ne: [maxLon, maxLat], sw: [minLon, minLat] };
     }
-
-    // Priority 2: no route yet — fit to start + destination so the camera shows
-    // something useful immediately (e.g. on first render before OSRM responds,
-    // or after app kill/reopen before the route is re-fetched).
+    // Priority 2: start + destination
     if (startLocation && destinationLocation) {
       const lats = [startLocation.lat, destinationLocation.lat];
       const lons = [startLocation.lon, destinationLocation.lon];
-      const maxLat = Math.max(...lats);
-      const minLat = Math.min(...lats);
-      const maxLon = Math.max(...lons);
-      const minLon = Math.min(...lons);
+      const maxLat = Math.max(...lats), minLat = Math.min(...lats);
+      const maxLon = Math.max(...lons), minLon = Math.min(...lons);
       if (maxLat === minLat && maxLon === minLon) {
-        return {
-          ne: [maxLon + 0.01, maxLat + 0.01],
-          sw: [minLon - 0.01, minLat - 0.01]
-        };
+        return { ne: [maxLon + 0.01, maxLat + 0.01], sw: [minLon - 0.01, minLat - 0.01] };
       }
       return { ne: [maxLon, maxLat], sw: [minLon, minLat] };
     }
-
-    // Priority 3: only current location known — center on it
-    if (currentLocation) {
-      return {
-        ne: [currentLocation.lon + 0.01, currentLocation.lat + 0.01],
-        sw: [currentLocation.lon - 0.01, currentLocation.lat - 0.01]
-      };
-    }
-
-    // Priority 4: nothing — fall through to hardcoded center in camera render
     return null;
-  }, [routePoints, currentLocation, startLocation, destinationLocation]);
+  }, [routePoints, startLocation, destinationLocation]);
 
   if (isExpoGo || !MapLibreGL) {
     return (
       <View style={styles.fallback}>
-        <Text>MapLibre requires a native build.</Text>
+        <Text style={styles.fallbackText}>Map requires a native build.</Text>
       </View>
     );
   }
 
   const MapComponent = MapLibreGL.Map;
   const CameraComponent = MapLibreGL.Camera;
-  const ShapeSource = MapLibreGL.ShapeSource;
-  const LineLayer = MapLibreGL.LineLayer;
+  const GeoJSONSource = MapLibreGL.GeoJSONSource;
+  const MapLayer = MapLibreGL.Layer;
   const MarkerComp = MapLibreGL.Marker;
+
+  // Camera: follow user once a GPS fix is received; otherwise fit initial bounds
+  const renderCamera = () => {
+    if (animatedLoc) {
+      // Follow mode: keep user centered at street zoom level
+      return (
+        <CameraComponent
+          center={[animatedLoc.lon, animatedLoc.lat] as [number, number]}
+          zoom={16}
+          duration={800}
+          easing="fly"
+        />
+      );
+    }
+    if (initialBounds) {
+      return (
+        <CameraComponent
+          bounds={[
+            initialBounds.sw[0], // west
+            initialBounds.sw[1], // south
+            initialBounds.ne[0], // east
+            initialBounds.ne[1], // north
+          ] as [number, number, number, number]}
+          padding={{ left: 40, right: 40, top: 100, bottom: 280 }}
+          duration={800}
+          easing="fly"
+        />
+      );
+    }
+    // Fallback: default center
+    return (
+      <CameraComponent
+        center={[77.0272806, 11.0283256] as [number, number]}
+        zoom={6}
+        duration={0}
+      />
+    );
+  };
 
   return (
     <MapComponent
@@ -121,62 +192,52 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
       logoEnabled={false}
       attributionEnabled={false}
     >
-      {bounds && Array.isArray(bounds.ne) && Array.isArray(bounds.sw) && bounds.ne.length === 2 && bounds.sw.length === 2 ? (
-        <CameraComponent
-          bounds={[
-            bounds.sw[0], // west
-            bounds.sw[1], // south
-            bounds.ne[0], // east
-            bounds.ne[1], // north
-          ]}
-          padding={{
-            left: 40,
-            right: 40,
-            top: 40,
-            bottom: 250 // Leave space for bottom card
-          }}
-          duration={1000}
-        />
-      ) : (
-        <CameraComponent
-          center={currentLocation ? [currentLocation.lon, currentLocation.lat] : [77.0272806, 11.0283256]}
-          zoom={currentLocation ? 15 : 6}
-          duration={1000}
-        />
-      )}
+      {renderCamera()}
 
-      {routeGeoJSON && (
-        <ShapeSource id="routeSource" shape={routeGeoJSON}>
-          <LineLayer
-            id="routeFill"
-            style={{
-              lineColor: '#4F46E5',
-              lineWidth: 5,
-              lineCap: 'round',
-              lineJoin: 'round'
-            }}
+      {/* Travelled segment: grey */}
+      {travelledRoute && (
+        <GeoJSONSource id="travelledRouteSource" data={travelledRoute as any}>
+          <MapLayer
+            id="travelledRouteFill"
+            type="line"
+            style={{ lineColor: '#94A3B8', lineWidth: 5, lineCap: 'round', lineJoin: 'round' }}
           />
         </GeoJSONSource>
       )}
 
-      {startLocation && (
-        <MarkerComp id="startLocation" lngLat={[startLocation.lon, startLocation.lat]} anchor="center">
-          <View style={[styles.currentLocMarker, { borderColor: '#10B981', backgroundColor: 'rgba(16, 185, 129, 0.2)' }]}>
-            <View style={[styles.currentLocInner, { backgroundColor: '#10B981' }]} />
+      {/* Remaining segment: indigo */}
+      {remainingRoute && (
+        <GeoJSONSource id="remainingRouteSource" data={remainingRoute as any}>
+          <MapLayer
+            id="remainingRouteFill"
+            type="line"
+            style={{ lineColor: '#4F46E5', lineWidth: 5, lineCap: 'round', lineJoin: 'round' }}
+          />
+        </GeoJSONSource>
+      )}
+
+      {/* Fixed start pin — only shown when user has moved away from it */}
+      {startLocation && animatedLoc && (
+        <MarkerComp id="startPin" lngLat={[startLocation.lon, startLocation.lat]} anchor="center">
+          <View style={styles.startMarker}>
+            <View style={styles.startMarkerInner} />
           </View>
         </MarkerComp>
       )}
 
+      {/* Destination pin */}
       {destinationLocation && (
-        <MarkerComp id="destination" lngLat={[destinationLocation.lon, destinationLocation.lat]} anchor="bottom">
-          <Text style={{ fontSize: 32 }}>📍</Text>
+        <MarkerComp id="destinationPin" lngLat={[destinationLocation.lon, destinationLocation.lat]} anchor="bottom">
+          <Text style={{ fontSize: 30 }}>📍</Text>
         </MarkerComp>
       )}
 
-      {currentLocation && (
-        <MarkerComp id="currentLocation" lngLat={[currentLocation.lon, currentLocation.lat]} anchor="center">
-          <View style={styles.currentLocMarker}>
-            <View style={styles.currentLocInner} />
+      {/* Live user marker — only rendered once real GPS fix arrives */}
+      {animatedLoc && (
+        <MarkerComp id="userLocation" lngLat={[animatedLoc.lon, animatedLoc.lat]} anchor="center">
+          <View style={styles.userMarkerOuter}>
+            <View style={styles.userMarkerPulse} />
+            <View style={styles.userMarkerDot} />
           </View>
         </MarkerComp>
       )}
@@ -185,7 +246,27 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
 }
 
 const styles = StyleSheet.create({
-  fallback: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F1F5F9' },
-  currentLocMarker: { width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(79, 70, 229, 0.2)', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#4F46E5' },
-  currentLocInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#4F46E5' }
+  fallback: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#E2E8F0' },
+  fallbackText: { color: '#64748B', fontSize: 14 },
+  // Start pin: small green dot
+  startMarker: {
+    width: 16, height: 16, borderRadius: 8,
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: '#10B981',
+  },
+  startMarkerInner: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#10B981' },
+  // User marker: indigo dot with pulse ring
+  userMarkerOuter: { width: 32, height: 32, justifyContent: 'center', alignItems: 'center' },
+  userMarkerPulse: {
+    position: 'absolute',
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: 'rgba(79, 70, 229, 0.15)',
+    borderWidth: 1, borderColor: 'rgba(79, 70, 229, 0.3)',
+  },
+  userMarkerDot: {
+    width: 16, height: 16, borderRadius: 8,
+    backgroundColor: '#4F46E5',
+    borderWidth: 3, borderColor: '#FFFFFF',
+  },
 });

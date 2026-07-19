@@ -2,19 +2,19 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { View, Text, StyleSheet, Switch, Alert, ActivityIndicator, TouchableOpacity, Pressable, LayoutAnimation } from 'react-native';
 import { StatusBar } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFamily } from '../context/FamilyContext';
-import { familyLocationsApi } from '../api/familyLocations';
-import { FamilyMemberLocation } from '../types';
 import { supabase } from '../lib/supabaseClient';
+import { familyLocationsApi } from '../api/familyLocations';
+import { useFamily } from '../context/FamilyContext';
 import { getCurrentLocationForAlert, getLastKnownLocation } from '../utils/location';
+import { getMapStyleUrl } from '../config/MapConfig';
+import { useMapProvider } from '../context/MapContext';
+import { getUserColor } from '../utils/colorUtils';
 import { apiClient } from '../api/client';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import BottomSheet, { BottomSheetFlatList } from '@gorhom/bottom-sheet';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import SOSSafetyModal from '../components/SOSSafetyModal';
 import { NearbyRespondersList } from '../components/NearbyRespondersList';
-import { useMapProvider } from '../context/MapContext';
-import { getMapStyleUrl } from '../config/MapConfig';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
@@ -56,7 +56,7 @@ const formatTime = (dateString: string) => {
 
 export default function FamilyLiveMapScreen() {
   const { family, refresh } = useFamily();
-  const [locations, setLocations] = useState<FamilyMemberLocation[]>([]);
+  const [locations, setLocations] = useState<any[]>([]);
   const [mapZoom, setMapZoom] = useState(17);
   const [sharingEnabled, setSharingEnabled] = useState(false);
   const { mapStyleId } = useMapProvider();
@@ -79,20 +79,14 @@ export default function FamilyLiveMapScreen() {
   const safetySummaryAbortRef = useRef<AbortController | null>(null);
   const bottomSheetRef = useRef<BottomSheet>(null);
   const mapRef = useRef<any>(null);
-  // Tracks the timestamp of the last explicit user toggle so we can discard
-  // any in-flight fetch response that started before the toggle.
   const toggleTimestampRef = useRef<number>(0);
-  // Stable camera position: set once on mount, only updated on explicit user action.
   const cameraPositionRef = useRef<{ center: [number, number]; zoom: number } | null>(null);
 
-  // Bottom sheet snap points: collapsed (15%), expanded (60%)
   const snapPoints = useMemo(() => ['15%', '60%'], []);
 
   useEffect(() => {
     const initLocation = async () => {
       try {
-        // Load persisted sharing preference as optimistic default while the
-        // server fetch is in flight.
         const stored = await AsyncStorage.getItem(SHARING_PREF_KEY);
         if (stored === 'true') setSharingEnabled(true);
 
@@ -127,7 +121,6 @@ export default function FamilyLiveMapScreen() {
       }
     });
 
-    // Track auth user changes
     const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
       const newUserId = session?.user?.id ?? null;
       const oldUserId = currentUserIdRef.current;
@@ -135,8 +128,6 @@ export default function FamilyLiveMapScreen() {
       if (newUserId !== oldUserId) {
         currentUserIdRef.current = newUserId;
         setMyUserId(newUserId);
-        
-        // Clear map state on user change
         setLocations([]);
         setErrorMsg(null);
         setLoading(true);
@@ -158,7 +149,6 @@ export default function FamilyLiveMapScreen() {
     if (newFamilyId !== oldFamilyId) {
       currentFamilyIdRef.current = newFamilyId;
       
-      // Clear old locations when familyId changes
       if (oldFamilyId !== null) {
         setLocations([]);
         setErrorMsg(null);
@@ -177,9 +167,6 @@ export default function FamilyLiveMapScreen() {
     if (myUserId && locations.length > 0) {
       const myLoc = locations.find(l => l.user_id === myUserId);
       if (myLoc) {
-        // Only follow the server value if this fetch started before the last
-        // explicit toggle. If the user toggled after the fetch started, their
-        // intent wins over the stale response.
         const fetchAge = (locations as any).__fetchStartTime ?? 0;
         if (fetchAge < toggleTimestampRef.current) return;
         setSharingEnabled(myLoc.sharing_enabled);
@@ -198,7 +185,6 @@ export default function FamilyLiveMapScreen() {
     if (!family) return;
     const userId = currentUserIdRef.current;
     
-    // Cancel previous request
     if (safetySummaryAbortRef.current) {
       safetySummaryAbortRef.current.abort();
     }
@@ -245,18 +231,15 @@ export default function FamilyLiveMapScreen() {
   useEffect(() => {
     if (!family) return;
 
-    // Set up Realtime Sync with race-condition fix
-    const channel = supabase
-      .channel('family_locations_updates')
+    const dbChannel = supabase
+      .channel('family_locations_db_updates')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'family_member_locations', filter: `family_id=eq.${family.id}` }, (payload) => {
-        
         let needsFetch = false;
         setLocations(currentLocations => {
           const newRow = payload.new as any;
           if (payload.eventType === 'UPDATE' && newRow?.user_id) {
              const exists = currentLocations.some(l => l.user_id === newRow.user_id);
              if (exists) {
-                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
                 return currentLocations.map(l => 
                   l.user_id === newRow.user_id 
                     ? { 
@@ -274,12 +257,10 @@ export default function FamilyLiveMapScreen() {
                 );
              }
           }
-          // Mark for refetch if INSERT, DELETE, or unknown user
           needsFetch = true;
           return currentLocations;
         });
 
-        // Safely execute the network side-effect outside the React updater
         if (needsFetch && myUserId) setTimeout(() => fetchLocations(myUserId), 0);
       })
       .subscribe((status) => {
@@ -288,19 +269,48 @@ export default function FamilyLiveMapScreen() {
           fetchNearbyResponders();
         }
       });
+      
+    const broadcastChannel = supabase
+      .channel(`family:${family.id}`)
+      .on('broadcast', { event: 'location' }, (payload) => {
+        const { user_id, latitude, longitude, accuracy, status } = payload.payload;
+        if (!user_id || !latitude || !longitude) return;
+        
+        setLocations(currentLocations => {
+          const exists = currentLocations.some(l => l.user_id === user_id);
+          if (exists) {
+            return currentLocations.map(l => 
+              l.user_id === user_id 
+                ? { 
+                    ...l, 
+                    latitude, 
+                    longitude, 
+                    accuracy, 
+                    status: status || l.status,
+                    has_location: true,
+                    is_stale: false,
+                    updated_at: new Date().toISOString()
+                  } 
+                : l
+            );
+          }
+          return currentLocations;
+        });
+      })
+      .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(dbChannel);
+      supabase.removeChannel(broadcastChannel);
     };
   }, [family?.id, myUserId]);
 
-  // Client-side presence sweep (runs every 30s to locally detect 15m staleness)
   useEffect(() => {
     const sweepInterval = setInterval(() => {
       setLocations(currentLocations => {
         let changed = false;
         const now = Date.now();
-        const staleThreshold = 15 * 60 * 1000; // 15 mins
+        const staleThreshold = 15 * 60 * 1000;
 
         const updated = currentLocations.map(loc => {
           if (!loc.updated_at) return loc;
@@ -324,31 +334,11 @@ export default function FamilyLiveMapScreen() {
     return () => clearInterval(sweepInterval);
   }, []);
 
-  // Periodic location push (runs every 30s when sharing is enabled)
-  useEffect(() => {
-    let pushInterval: NodeJS.Timeout | null = null;
-    
-    if (sharingEnabled && !errorMsg) {
-      pushInterval = setInterval(() => {
-        updateMyLocation();
-      }, 30000);
-    }
-    
-    return () => {
-      if (pushInterval) clearInterval(pushInterval);
-    };
-  }, [sharingEnabled, errorMsg]);
-
   const fetchLocations = async (userId: string | null) => {
     if (!family) return;
-
     const familyId = family.id;
-    // Capture the fetch start time. Any response that arrives after a user
-    // toggle (toggleTimestampRef.current > fetchStartTime) will be ignored
-    // for the sharing_enabled sync so the user's explicit intent wins.
     const fetchStartTime = Date.now();
 
-    // Prevent concurrent fetches
     if (fetchInFlightRef.current) return;
     fetchInFlightRef.current = true;
 
@@ -356,26 +346,18 @@ export default function FamilyLiveMapScreen() {
       setErrorMsg(null);
       const data = await familyLocationsApi.getLocations(familyId);
       
-      // Guard against stale responses - only update if familyId hasn't changed
       if (currentFamilyIdRef.current === familyId) {
-        // Attach the fetch start time so the sync useEffect can compare it
-        // against the last toggle timestamp.
         (data as any).__fetchStartTime = fetchStartTime;
         setLocations(data);
         setErrorMsg(null);
       }
     } catch (e: any) {
       console.warn('Failed to fetch family locations', e);
-      
-      // Handle 403 - stale family state (user switched accounts)
       if (e?.response?.status === 403) {
-        // Reset stale family state
         setLocations([]);
         setErrorMsg(null);
         setLoading(true);
         currentFamilyIdRef.current = null;
-        
-        // Trigger FamilyContext to refetch current family
         setTimeout(() => refresh(), 300);
       } else if (e?.response?.status === 500) {
         setErrorMsg('Live location table is not ready. Please run the latest migration.');
@@ -391,10 +373,7 @@ export default function FamilyLiveMapScreen() {
   const updateMyLocation = async () => {
     const userId = currentUserIdRef.current;
     const familyId = currentFamilyIdRef.current;
-    
-    // Guard against stale updates
     if (!userId || !familyId) return;
-
     try {
       const loc = await getCurrentLocationForAlert(true);
       if (loc && !loc.permissionDenied) {
@@ -411,11 +390,8 @@ export default function FamilyLiveMapScreen() {
   };
 
   const handleToggleSharing = async (val: boolean) => {
-    // Record when this explicit toggle happened. Any fetch response that
-    // started before this timestamp will not overwrite the user's choice.
     toggleTimestampRef.current = Date.now();
     setSharingEnabled(val);
-    // Persist the preference so it survives navigation and app restart.
     AsyncStorage.setItem(SHARING_PREF_KEY, val ? 'true' : 'false').catch((e) => console.warn('[FamilyMap] Failed to persist sharing preference', e));
     try {
       await familyLocationsApi.toggleSharing(val);
@@ -430,35 +406,28 @@ export default function FamilyLiveMapScreen() {
     }
   };
 
-  const handleMemberTap = useCallback((member: FamilyMemberLocation) => {
-    if (member.latitude && member.longitude && mapRef.current) {
-      // Not imperative anymore, map uses centerCoordinate passed via props, but wait...
-      // MapLibreRenderer doesn't currently support setting center via tapping because centerCoordinate is derived from plottableLocs array!
-      // In this audit, we will just snap bottom sheet for now since center is locked to user.
-    }
-    bottomSheetRef.current?.snapToIndex(0); // Collapse sheet after selection
+  const handleMemberTap = useCallback((member: any) => {
+    bottomSheetRef.current?.snapToIndex(0);
   }, []);
 
-  const renderListItem = useCallback(({ item }: { item: FamilyMemberLocation }) => {
-    let statusText = '';
-    let statusColor = '#94A3B8';
-    let timeText = '';
+  const renderListItem = useCallback(({ item }: { item: any }) => {
+    const isMe = item.user_id === myUserId;
+    const isSOS = item.status === 'SOS_ACTIVE';
+    const isOffline = item.status === 'OFFLINE' || item.is_stale;
     
-    const hasValidCoords = typeof item.latitude === 'number' && typeof item.longitude === 'number';
+    const statusColor = getUserColor(item.user_id, isMe, isSOS, isOffline);
+
+    let statusText = item.status.replace('_', ' ');
+    let timeText = '';
 
     if (!item.sharing_enabled) {
       statusText = 'SHARING OFF';
-      statusColor = '#94A3B8';
     } else if (!item.has_location) {
       statusText = 'NO LOCATION YET';
-      statusColor = '#94A3B8';
-    } else if (item.is_stale || item.status === 'OFFLINE') {
+    } else if (isOffline) {
       statusText = 'OFFLINE';
-      statusColor = '#94A3B8';
       timeText = item.updated_at ? `Last seen: ${formatTime(item.updated_at)}` : '';
     } else {
-      statusText = item.status.replace('_', ' ');
-      statusColor = getStatusColor(item.status, item.is_stale);
       timeText = item.updated_at ? `Updated: ${formatTime(item.updated_at)}` : '';
     }
 
@@ -539,6 +508,56 @@ export default function FamilyLiveMapScreen() {
           const MapComponent = MapLibreGL.Map;
           const CameraComponent = MapLibreGL.Camera;
           const MarkerComp = MapLibreGL.Marker;
+          const CalloutComp = MapLibreGL.Callout;
+
+          // Inner component to handle smooth animation for each marker independently
+          const AnimatedFamilyMarker = ({ loc, MapLibreGL }: { loc: any, MapLibreGL: any }) => {
+            const [animLoc, setAnimLoc] = useState({ lat: loc.latitude, lon: loc.longitude });
+            const isMe = loc.user_id === myUserId;
+            const isSOS = loc.status === 'SOS';
+            const isOffline = loc.status === 'OFFLINE' || loc.is_stale;
+            const markerColor = getUserColor(loc.user_id, isMe, isSOS, isOffline);
+            const userName = loc.profiles?.full_name || loc.profiles?.email || 'Unknown User';
+
+            useEffect(() => {
+              const startLoc = animLoc;
+              const endLoc = { lat: loc.latitude, lon: loc.longitude };
+              const dist = Math.sqrt(Math.pow(endLoc.lat - startLoc.lat, 2) + Math.pow(endLoc.lon - startLoc.lon, 2));
+              
+              if (dist < 0.000001 || dist > 0.01) {
+                setAnimLoc(endLoc);
+                return;
+              }
+
+              let startTime = 0;
+              const duration = 1000;
+              const animate = (time: number) => {
+                if (!startTime) startTime = time;
+                const progress = Math.min((time - startTime) / duration, 1);
+                const ease = 1 - Math.pow(1 - progress, 3);
+                setAnimLoc({
+                  lat: startLoc.lat + (endLoc.lat - startLoc.lat) * ease,
+                  lon: startLoc.lon + (endLoc.lon - startLoc.lon) * ease,
+                });
+                if (progress < 1) requestAnimationFrame(animate);
+              };
+              const rafId = requestAnimationFrame(animate);
+              return () => cancelAnimationFrame(rafId);
+            }, [loc.latitude, loc.longitude]);
+
+            return (
+              <MapLibreGL.Marker
+                id={`family-marker-${loc.user_id}`}
+                lngLat={[animLoc.lon, animLoc.lat]}
+                anchor="center"
+              >
+                <View style={[styles.markerView, { backgroundColor: markerColor }]}>
+                  <View style={styles.markerInnerDot} />
+                </View>
+                <MapLibreGL.Callout title={userName} />
+              </MapLibreGL.Marker>
+            );
+          };
 
           return (
             <MapComponent
@@ -554,16 +573,7 @@ export default function FamilyLiveMapScreen() {
                 duration={0}
               />
               {plottableLocs.map(loc => (
-                <MarkerComp
-                  key={loc.user_id}
-                  id={`family-marker-${loc.user_id}`}
-                  lngLat={[loc.longitude!, loc.latitude!]}
-                  anchor="center"
-                >
-                  <View style={[styles.markerView, { backgroundColor: getStatusColor(loc.status, loc.is_stale) }]}>
-                    <View style={styles.markerInnerDot} />
-                  </View>
-                </MarkerComp>
+                <AnimatedFamilyMarker key={loc.user_id} loc={loc} MapLibreGL={MapLibreGL} />
               ))}
             </MapComponent>
           );

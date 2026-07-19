@@ -64,9 +64,4 @@ export class BackendPlacesProvider implements GeocodingProvider {
     // since the spec only requested Google Places for location selection.
     return this.fallbackProvider.reverseGeocode(latitude, longitude);
   }
-
-  async getRoute(start: {latitude: number, longitude: number}, destination: {latitude: number, longitude: number}): Promise<{lat: number, lon: number}[] | null> {
-    // Continue using OSRM for routing
-    return this.fallbackProvider.getRoute(start, destination);
-  }
 }

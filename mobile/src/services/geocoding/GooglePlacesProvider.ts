@@ -78,7 +78,5 @@ export class GooglePlacesProvider implements GeocodingProvider {
     return this.fallbackProvider.reverseGeocode(latitude, longitude);
   }
 
-  async getRoute(start: {latitude: number, longitude: number}, destination: {latitude: number, longitude: number}): Promise<{lat: number, lon: number}[] | null> {
-    return this.fallbackProvider.getRoute(start, destination);
-  }
+
 }

@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { BottomSheetFlatList } from '@gorhom/bottom-sheet';
+import { getUserColor } from '../utils/colorUtils';
 
 export const NearbyRespondersList = ({ responders, loading, sharingEnabled }: any) => {
   if (!sharingEnabled) {
@@ -40,7 +41,10 @@ export const NearbyRespondersList = ({ responders, loading, sharingEnabled }: an
           <View style={styles.card}>
             <View style={styles.headerRow}>
               <Text style={styles.name}>{r.name}</Text>
-              <View style={[styles.statusDot, { backgroundColor: r.status === 'SAFE' ? '#22C55E' : '#F59E0B' }]} />
+              <View style={[
+                styles.statusDot, 
+                { backgroundColor: getUserColor(r.user_id, false, r.status === 'SOS', false) }
+              ]} />
             </View>
             <Text style={styles.role}>{r.role === 'admin' ? 'Guardian' : 'Family Member'}</Text>
             <View style={styles.distanceRow}>

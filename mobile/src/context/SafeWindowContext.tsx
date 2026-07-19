@@ -5,7 +5,8 @@ import { getCurrentLocationForAlert } from '../utils/location';
 import * as Location from 'expo-location';
 import { distanceBetweenPointsMeters, isRouteDeviation } from '../utils/geoUtils';
 import { useContacts } from './ContactsContext';
-import { getRoute } from '../services/geocodingService';
+import { searchPlaces, reverseGeocode } from '../services/geocodingService';
+import { getRoute } from '../services/routingService';
 import { Alert, AppState, NativeModules, NativeEventEmitter, PermissionsAndroid, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { checkIsExempt, requestExemption } from '../modules/BatteryOptimization';
@@ -15,8 +16,7 @@ import { apiClient } from '../api/client';
 import { locationSharingEmitter, startSafeWindowLocation, stopSafeWindowLocation } from '../modules/LocationSharingModule';
 import polyline from '@mapbox/polyline';
 
-const { SafeHerAudioModule } = NativeModules;
-const audioEmitter = SafeHerAudioModule ? new NativeEventEmitter(SafeHerAudioModule) : null;
+// Obsolete audio modules removed
 
 interface SafeWindowContextType {
   safeWindow: SafeWindowState;
@@ -94,44 +94,20 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const unsentLocRef = useRef<{ lat: number, lon: number, accuracy?: number, captured_at?: string, provider?: string } | null>(null);
   const isSyncingLocationRef = useRef(false);
   const arrivalStartTimeRef = useRef<number | null>(null);
+  
+  // Realtime Broadcast Refs
+  const lastBroadcastTimeRef = useRef<number>(0);
+  const lastBroadcastLocRef = useRef<{ lat: number, lon: number } | null>(null);
 
-  // Voice SOS POC 2 State Listener
-  useEffect(() => {
-    if (!audioEmitter) return;
-    const metricSub = audioEmitter.addListener('onAudioMetrics', (event: any) => {
-      // Intentionally omitting raw console logs for production
-    });
-    const stateSub = audioEmitter.addListener('onVoiceMonitoringState', (event: any) => {
-      if (event.state === 'MIC_START_FAILED') {
-        // Here we could handle UI contextually, but importantly, do not crash Location
-        console.warn("[SafeHerAudioPOC] Mic FGS failed to start, falling back to location only.");
-      }
-    });
-    return () => {
-      metricSub.remove();
-      stateSub.remove();
-    };
-  }, []);
+  // Voice SOS POC 2 State Listener removed
 
   // Explicit Voice SOS POC 2 Start/Stop commands
   const startAudioCapture = async () => {
-    if (Platform.OS !== 'android' || !SafeHerAudioModule) return;
-    try {
-      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
-      if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-        SafeHerAudioModule.startCapture();
-      } else {
-        console.warn("[VoicePOC] Microphone permission denied. Voice POC disabled.");
-      }
-    } catch (err) {
-      console.warn("[VoicePOC] Permission request failed", err);
-    }
+    // Legacy audio capture removed
   };
 
   const stopAudioCapture = () => {
-    if (Platform.OS === 'android' && SafeHerAudioModule) {
-      SafeHerAudioModule.stopCapture();
-    }
+    // Legacy audio capture removed
   };
 
   const clearExistingNotification = async () => {
@@ -234,7 +210,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const { data: { session } } = await supabase.auth.getSession();
         if (session) {
           const apiUrl = apiClient.defaults.baseURL || 'https://women-safety-voice-sos.onrender.com';
-          await startSafeWindowLocation(session.access_token, apiUrl, session.user.id);
+          await startSafeWindowLocation(session.access_token, apiUrl, session.user.id, active.id);
         }
 
         // Immediately check if already missed while app was closed
@@ -468,14 +444,36 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (!journeyData) throw new Error(errorMessage);
       }
 
-      let parsedRoute = initialRoute;
-      if (journeyData.route_polyline) {
+      let parsedRoute = [] as {lat: number, lon: number}[];
+      if (journeyData.route_polyline && journeyData.route_provider === 'google') {
         try {
           const decoded = polyline.decode(journeyData.route_polyline);
           parsedRoute = decoded.map((coord: number[]) => ({ lat: coord[0], lon: coord[1] }));
         } catch (e) {
-          console.warn('[MAP-DEBUG] Failed to decode backend route_polyline, falling back to straight line', e);
+          console.warn('[MAP-DEBUG] Failed to decode backend route_polyline', e);
         }
+      }
+      
+      // If we don't have a high-fidelity route from the backend, fetch it from MapTiler
+      if (parsedRoute.length === 0 && actualStartLoc && destLoc) {
+        try {
+          const route = await getRoute(
+            { latitude: actualStartLoc.latitude, longitude: actualStartLoc.longitude },
+            { latitude: destLoc.latitude, longitude: destLoc.longitude }
+          );
+          if (route && route.length > 0) {
+            parsedRoute = route;
+          } else {
+            console.warn('[ROUTING ERROR] The routing provider returned an empty route.');
+          }
+        } catch (e) {
+          console.warn('[ROUTING ERROR] Failed to fetch high-fidelity route locally:', e);
+        }
+      }
+      
+      // Fallback to straight line only if routing request genuinely failed to return points
+      if (parsedRoute.length === 0 && actualStartLoc && destLoc) {
+         parsedRoute = [{ lat: actualStartLoc.latitude, lon: actualStartLoc.longitude }, { lat: destLoc.latitude, lon: destLoc.longitude }];
       }
 
       setSafeWindow({
@@ -502,7 +500,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         const apiUrl = apiClient.defaults.baseURL || 'https://women-safety-voice-sos.onrender.com';
-        await startSafeWindowLocation(session.access_token, apiUrl, session.user.id);
+        await startSafeWindowLocation(session.access_token, apiUrl, session.user.id, journeyData.id);
       }
       startAudioCapture(); // Request microphone natively independently
       await scheduleNextNotification(journeyData.check_in_due_at, demoMode);
@@ -524,6 +522,13 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const { data: { session } } = await supabase.auth.getSession();
         if (session) {
           const res = await apiClient.post(`/api/journeys/${targetId}/complete`);
+          
+          // Broadcast completion to Guardians instantly
+          supabase.channel(`journey:${targetId}`).send({
+            type: 'broadcast',
+            event: 'journey:completed',
+            payload: { journeyId: targetId, timestamp: new Date().toISOString() }
+          }).catch(e => console.warn('Broadcast completion failed', e));
         }
       } catch (e) {
         console.warn("Could not sync journey complete to backend", e);
@@ -716,7 +721,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   }, [safeWindow.status]);
 
   useEffect(() => {
-    let locationSubscription: Location.LocationSubscription | null = null;
+    let fgSubscription: Location.LocationSubscription | null = null;
     let emitterSubscription: any = null;
     let isMounted = true;
 
@@ -736,6 +741,45 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (!isMounted) return;
         console.log("[SafeWindowContext] Location permission granted. Starting watcher...");
 
+        // 1. Setup high-frequency adaptive foreground watcher
+        // distanceInterval ensures it slows down when stationary to preserve battery
+        fgSubscription = await Location.watchPositionAsync({
+          accuracy: Location.Accuracy.High,
+          timeInterval: 1000,
+          distanceInterval: 1
+        }, (loc) => {
+          if (!isMounted || safeWindowRef.current.status !== 'ACTIVE') return;
+          const currentLoc = { lat: loc.coords.latitude, lon: loc.coords.longitude };
+          setCurrentLocation(currentLoc);
+
+          // Throttled Realtime Broadcast (max every 2s if moved > 2m, or every 10s as heartbeat)
+          const now = Date.now();
+          const journeyId = safeWindowRef.current.journeyId;
+          if (journeyId && now - lastBroadcastTimeRef.current >= 2000) {
+            const dist = lastBroadcastLocRef.current ? distanceBetweenPointsMeters(
+              currentLoc.lat, currentLoc.lon,
+              lastBroadcastLocRef.current.lat, lastBroadcastLocRef.current.lon
+            ) : 999;
+            
+            if (dist > 2 || now - lastBroadcastTimeRef.current >= 10000) {
+              supabase.channel(`journey:${journeyId}`).send({
+                type: 'broadcast',
+                event: 'location',
+                payload: {
+                  latitude: currentLoc.lat,
+                  longitude: currentLoc.lon,
+                  accuracy: loc.coords.accuracy,
+                  timestamp: new Date(loc.timestamp).toISOString()
+                }
+              }).catch(e => console.warn('Broadcast failed', e));
+              
+              lastBroadcastTimeRef.current = now;
+              lastBroadcastLocRef.current = currentLoc;
+            }
+          }
+        });
+
+        // 2. Setup background emitter for persistence
         emitterSubscription = locationSharingEmitter.addListener('onLocationUpdated', async (payloadStr: string) => {
             const currentSafeWindow = safeWindowRef.current;
             if (!isMounted || currentSafeWindow.status !== 'ACTIVE') return;
@@ -748,11 +792,14 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               return;
             }
 
-            console.log(`[SafeWindowContext] Watcher received location: lat=${loc.latitude}, lon=${loc.longitude}, accuracy=${loc.accuracy}`);
-
             const now = new Date().getTime();
             const currentLoc = { lat: loc.latitude, lon: loc.longitude };
-            setCurrentLocation(currentLoc);
+            
+            // Only update current location from background if foreground watcher isn't active
+            if (!fgSubscription) {
+              setCurrentLocation(currentLoc);
+            }
+            
             const capturedAt = new Date(loc.timestamp || now).toISOString();
 
             // 1. Sync backend tracking (every 20s OR > 25m movement)
@@ -781,7 +828,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 } : {
                   latitude: currentLoc.lat,
                   longitude: currentLoc.lon,
-                  accuracy: loc.coords.accuracy || 9999,
+                  accuracy: loc.accuracy || 9999,
                   captured_at: capturedAt,
                   provider: 'watchPosition'
                 };
@@ -796,7 +843,7 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 } catch (e) {
                   console.warn("[SafeWindowContext] Could not sync location to backend (offline/network issue)", e);
                   if (!unsentLocRef.current) {
-                    unsentLocRef.current = { lat: currentLoc.lat, lon: currentLoc.lon, accuracy: loc.coords.accuracy || 9999, captured_at: capturedAt, provider: 'watchPosition' };
+                    unsentLocRef.current = { lat: currentLoc.lat, lon: currentLoc.lon, accuracy: loc.accuracy || 9999, captured_at: capturedAt, provider: 'watchPosition' };
                   }
                 } finally {
                   isSyncingLocationRef.current = false;
@@ -877,6 +924,9 @@ export const SafeWindowProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       isMounted = false;
       if (emitterSubscription) {
         emitterSubscription.remove();
+      }
+      if (fgSubscription) {
+        fgSubscription.remove();
       }
     };
   }, [safeWindow.status]);

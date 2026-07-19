@@ -228,65 +228,88 @@ export const SafeWindowScreen: React.FC = () => {
   const riskScore = calculateRiskScore();
 
   if (safeWindow.status === 'ACTIVE' || safeWindow.status === 'MISSED_CHECKIN') {
+    const isMissed = safeWindow.status === 'MISSED_CHECKIN';
+    const etaMinutes = distanceToDestination != null
+      ? Math.max(1, Math.round(distanceToDestination / 1000 / 0.5))
+      : (safeWindow.estimated_duration_minutes || null);
+    const distKm = distanceToDestination != null
+      ? (distanceToDestination / 1000).toFixed(1)
+      : (safeWindow.distance_km?.toFixed(1) || null);
+
     return (
       <View style={{ flex: 1 }}>
+        {/* Full-screen map */}
         <MapRouteLayer
           routePoints={safeWindow.routePoints}
-          currentLocation={currentLocation || (safeWindow.startLocation ? { lat: safeWindow.startLocation.latitude, lon: safeWindow.startLocation.longitude } : null)}
+          currentLocation={currentLocation}
           startLocation={safeWindow.startLocation ? { lat: safeWindow.startLocation.latitude, lon: safeWindow.startLocation.longitude } : null}
           destinationLocation={safeWindow.destinationLocation ? { lat: safeWindow.destinationLocation.latitude, lon: safeWindow.destinationLocation.longitude } : null}
         />
-        
-        {/* Floating Overlay for Status */}
-        <SafeAreaView style={styles.floatingOverlay} pointerEvents="box-none">
-          <View style={styles.topPanel}>
-            <View style={styles.statusRow}>
-              <Text style={styles.label}>Journey Active</Text>
-              <View style={[styles.statusBadge, safeWindow.status === 'MISSED_CHECKIN' ? styles.badgeError : styles.badgeActive]}>
-                <Text style={[styles.statusText, safeWindow.status === 'MISSED_CHECKIN' ? styles.textError : styles.textActive]}>
-                  {safeWindow.status === 'MISSED_CHECKIN' ? 'Missed Check-in' : 'Tracking'}
-                </Text>
-              </View>
-            </View>
-            
-            {safeWindow.route_status === 'calculated' && (safeWindow.distance_km != null || distanceToDestination != null) && (
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
-                <View>
-                  <Text style={{ fontSize: 12, color: '#64748B', fontWeight: 'bold' }}>ETA</Text>
-                  <Text style={{ fontSize: 24, fontWeight: '800', color: '#1E293B' }}>
-                    {distanceToDestination != null 
-                      ? `${Math.max(1, Math.round(distanceToDestination / 1000 / 0.5))}m` // 30km/h avg speed
-                      : `${safeWindow.estimated_duration_minutes || '--'}m`}
-                  </Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={{ fontSize: 12, color: '#64748B', fontWeight: 'bold' }}>DISTANCE</Text>
-                  <Text style={{ fontSize: 24, fontWeight: '800', color: '#1E293B' }}>
-                    {distanceToDestination != null 
-                      ? `${(distanceToDestination / 1000).toFixed(1)} km` 
-                      : `${safeWindow.distance_km || '--'} km`}
-                  </Text>
-                </View>
+
+        {/* ── Compact top pill ─────────────────────────────────────── */}
+        <SafeAreaView style={journeyStyles.topPillContainer} pointerEvents="box-none">
+          <View style={[journeyStyles.topPill, isMissed && journeyStyles.topPillAlert]}>
+            {/* Status dot */}
+            <View style={[journeyStyles.statusDot, isMissed ? journeyStyles.statusDotAlert : journeyStyles.statusDotActive]} />
+            <Text style={[journeyStyles.statusLabel, isMissed && journeyStyles.statusLabelAlert]}>
+              {isMissed ? 'MISSED CHECK-IN' : 'JOURNEY ACTIVE'}
+            </Text>
+
+            {/* ETA + Distance (only when route calculated) */}
+            {safeWindow.route_status === 'calculated' && (etaMinutes || distKm) && (
+              <View style={journeyStyles.pillStats}>
+                {etaMinutes && (
+                  <View style={journeyStyles.stat}>
+                    <Text style={journeyStyles.statLabel}>ETA</Text>
+                    <Text style={journeyStyles.statValue}>{etaMinutes}m</Text>
+                  </View>
+                )}
+                {distKm && (
+                  <View style={journeyStyles.stat}>
+                    <Text style={journeyStyles.statLabel}>DIST</Text>
+                    <Text style={journeyStyles.statValue}>{distKm}km</Text>
+                  </View>
+                )}
               </View>
             )}
           </View>
+        </SafeAreaView>
 
-          <View style={{ flex: 1 }} pointerEvents="none" />
-
-          <View style={styles.bottomPanel}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 }}>
-              <View style={[styles.timerCircleSmall, { backgroundColor: '#EEF2FF', borderColor: '#C7D2FE' }]}>
-                <Text style={styles.countdownTitleSmall}>Time Left</Text>
-                <Text style={styles.countdownSmall}>{formatTime(timeLeft)}</Text>
+        {/* ── Compact bottom action bar ─────────────────────────────── */}
+        <SafeAreaView style={journeyStyles.bottomBar} pointerEvents="box-none">
+          <View style={journeyStyles.bottomCard}>
+            {/* Timer row */}
+            <View style={journeyStyles.timerRow}>
+              <View style={journeyStyles.timerItem}>
+                <Text style={journeyStyles.timerLabel}>TIME LEFT</Text>
+                <Text style={journeyStyles.timerValue}>{formatTime(timeLeft)}</Text>
               </View>
-              <View style={[styles.timerCircleSmall, { backgroundColor: '#FEF3C7', borderColor: '#FDE68A' }]}>
-                <Text style={styles.countdownTitleSmall}>Check-in In</Text>
-                <Text style={[styles.countdownSmall, { color: '#D97706' }]}>{formatTime(checkInTimeLeft)}</Text>
+              <View style={journeyStyles.timerDivider} />
+              <View style={journeyStyles.timerItem}>
+                <Text style={[journeyStyles.timerLabel, isMissed && { color: '#DC2626' }]}>CHECK-IN</Text>
+                <Text style={[journeyStyles.timerValue, { color: isMissed ? '#DC2626' : '#D97706' }]}>
+                  {isMissed ? 'OVERDUE' : formatTime(checkInTimeLeft)}
+                </Text>
               </View>
             </View>
-            
-            <PrimaryButton title={isCheckingIn ? "Checking in..." : "I'm Safe (Check-in)"} variant="primary" onPress={handleCheckIn} disabled={isCheckingIn} style={{width: '100%', marginBottom: 12}} />
-            <PrimaryButton title={isCompleting ? "Ending..." : "End Journey"} variant="outline" onPress={handleEnd} disabled={isCompleting} style={{width: '100%'}} />
+
+            {/* Action buttons */}
+            <View style={journeyStyles.actionRow}>
+              <PrimaryButton
+                title={isCheckingIn ? 'Checking in...' : "I'm Safe"}
+                variant="primary"
+                onPress={handleCheckIn}
+                disabled={isCheckingIn}
+                style={journeyStyles.checkInBtn}
+              />
+              <PrimaryButton
+                title={isCompleting ? 'Ending...' : 'End Journey'}
+                variant="outline"
+                onPress={handleEnd}
+                disabled={isCompleting}
+                style={journeyStyles.endBtn}
+              />
+            </View>
           </View>
         </SafeAreaView>
       </View>
@@ -545,20 +568,21 @@ const styles = StyleSheet.create({
   errorBannerText: { fontSize: 14, color: '#991B1B', flex: 1, fontWeight: '600' },
   checkInSection: { marginBottom: 20 },
   sectionLabel: { fontSize: 14, fontWeight: '700', color: '#64748B', marginBottom: 8 },
+  // Active journey overlay styles — compact glassmorphism
   floatingOverlay: { flex: 1, padding: 16, justifyContent: 'space-between' },
-  topPanel: { backgroundColor: 'white', padding: 16, borderRadius: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 5 },
-  bottomPanel: { backgroundColor: 'white', padding: 16, borderRadius: 16, shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 5 },
+  topPanel: { backgroundColor: 'rgba(255,255,255,0.95)', padding: 14, borderRadius: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 4 },
+  bottomPanel: { backgroundColor: 'rgba(255,255,255,0.97)', padding: 14, borderRadius: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 6 },
   statusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  label: { fontSize: 16, fontWeight: '800', color: '#1E293B' },
-  statusBadge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
+  label: { fontSize: 15, fontWeight: '800', color: '#1E293B' },
+  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
   badgeActive: { backgroundColor: '#EEF2FF' },
   badgeError: { backgroundColor: '#FEE2E2' },
-  statusText: { fontSize: 13, fontWeight: '800', textTransform: 'uppercase' },
+  statusText: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
   textActive: { color: '#4F46E5' },
   textError: { color: '#DC2626' },
-  timerCircleSmall: { flex: 1, borderRadius: 12, padding: 16, alignItems: 'center', borderWidth: 1, marginHorizontal: 4 },
-  countdownTitleSmall: { fontSize: 12, color: '#64748B', fontWeight: '700', textTransform: 'uppercase', marginBottom: 4 },
-  countdownSmall: { fontSize: 28, fontWeight: '800', color: '#4F46E5' }
+  timerCircleSmall: { flex: 1, borderRadius: 10, padding: 12, alignItems: 'center', borderWidth: 1, marginHorizontal: 4 },
+  countdownTitleSmall: { fontSize: 10, color: '#64748B', fontWeight: '700', textTransform: 'uppercase', marginBottom: 2 },
+  countdownSmall: { fontSize: 22, fontWeight: '800', color: '#4F46E5' }
 });
 
 const tpStyles = StyleSheet.create({
@@ -570,4 +594,90 @@ const tpStyles = StyleSheet.create({
   selectedName: { fontSize: 15, fontWeight: '700', color: '#3730A3' },
   selectedRadius: { fontSize: 12, color: '#6366F1', marginTop: 2 },
   clearTp: { backgroundColor: '#FFFFFF', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#C7D2FE', marginLeft: 8 }
+});
+
+// Compact navigation-style active journey overlay
+const journeyStyles = StyleSheet.create({
+  // Top pill: absolute, floated over map
+  topPillContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 16,
+    right: 16,
+    zIndex: 10,
+  },
+  topPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginTop: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  topPillAlert: {
+    backgroundColor: 'rgba(254,242,242,0.97)',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  statusDot: {
+    width: 8, height: 8, borderRadius: 4, marginRight: 8,
+  },
+  statusDotActive: { backgroundColor: '#22C55E' },
+  statusDotAlert: { backgroundColor: '#DC2626' },
+  statusLabel: {
+    fontSize: 12, fontWeight: '800', color: '#1E293B',
+    letterSpacing: 0.5, flex: 1,
+  },
+  statusLabelAlert: { color: '#DC2626' },
+  pillStats: {
+    flexDirection: 'row', gap: 12,
+  },
+  stat: { alignItems: 'center' },
+  statLabel: { fontSize: 9, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase' },
+  statValue: { fontSize: 15, fontWeight: '800', color: '#1E293B' },
+
+  // Bottom action bar
+  bottomBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+  },
+  bottomCard: {
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  timerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  timerItem: { flex: 1, alignItems: 'center' },
+  timerLabel: { fontSize: 10, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase', marginBottom: 2 },
+  timerValue: { fontSize: 26, fontWeight: '900', color: '#4F46E5', letterSpacing: -0.5 },
+  timerDivider: { width: 1, height: 36, backgroundColor: '#E2E8F0', marginHorizontal: 8 },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 8,
+  },
+  checkInBtn: { flex: 2 },
+  endBtn: { flex: 1 },
 });

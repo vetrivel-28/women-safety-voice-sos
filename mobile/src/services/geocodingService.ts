@@ -1,14 +1,18 @@
 import { GooglePlacesProvider } from './geocoding/GooglePlacesProvider';
 import { PlaceResult, GeocodingProvider } from './geocoding/GeocodingProvider';
-
 import { NominatimProvider } from './geocoding/NominatimProvider';
+import { MapTilerProvider } from './geocoding/MapTilerProvider';
 
 const googleApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-const provider: GeocodingProvider = googleApiKey 
-  ? new GooglePlacesProvider() 
-  : new NominatimProvider();
+const mapTilerApiKey = process.env.EXPO_PUBLIC_MAPTILER_API_KEY;
 
-export const isUsingNominatim = !googleApiKey;
+const provider: GeocodingProvider = mapTilerApiKey
+  ? new MapTilerProvider(mapTilerApiKey)
+  : googleApiKey 
+    ? new GooglePlacesProvider() 
+    : new NominatimProvider();
+
+export const isUsingNominatim = !googleApiKey && !mapTilerApiKey;
 
 export { PlaceResult };
 
@@ -22,9 +26,5 @@ export const geocodePlace = async (placeId: string): Promise<{latitude: number, 
 
 export const reverseGeocode = async (latitude: number, longitude: number): Promise<string> => {
   return provider.reverseGeocode(latitude, longitude);
-};
-
-export const getRoute = async (start: {latitude: number, longitude: number}, destination: {latitude: number, longitude: number}): Promise<{lat: number, lon: number}[] | null> => {
-  return provider.getRoute(start, destination);
 };
 

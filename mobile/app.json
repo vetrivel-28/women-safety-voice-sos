@@ -46,7 +46,8 @@
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "SafeHer uses your location to attach it to SOS alerts so your contacts know where you are.",
-          "isAndroidBackgroundLocationEnabled": true
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       [

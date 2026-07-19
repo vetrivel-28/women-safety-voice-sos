@@ -17,6 +17,9 @@ import { useGuardianDashboard } from '../hooks/useGuardianDashboard';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SectionHeader } from '../components/SectionHeader';
 import { apiClient } from '../api/client';
+import MapRouteLayer from '../components/map/MapRouteLayer';
+import { supabase } from '../lib/supabaseClient';
+import polyline from '@mapbox/polyline';
 
 type AlertDetailsNavigationProp = NativeStackNavigationProp<RootStackParamList, 'GuardianAlertDetails'>;
 
@@ -91,6 +94,51 @@ export const GuardianAlertDetailsScreen: React.FC = () => {
 
   const [freshness, setFreshness] = useState<number | null>(null);
   const [timeLeft, setTimeLeft] = useState<number>(0);
+
+  // Live real-time location state via Broadcast
+  const [liveLocation, setLiveLocation] = useState<{ lat: number, lon: number } | null>(null);
+  const [routePoints, setRoutePoints] = useState<{lat: number, lon: number}[]>([]);
+
+  useEffect(() => {
+    if (journey?.route_polyline) {
+      try {
+        const decoded = polyline.decode(journey?.route_polyline);
+        setRoutePoints(decoded.map((c: number[]) => ({ lat: c[0], lon: c[1] })));
+      } catch (e) {
+        console.warn('Failed to decode journey polyline');
+      }
+    }
+  }, [journey?.route_polyline]);
+
+  useEffect(() => {
+    if (journey?.current_latitude && journey?.current_longitude && !liveLocation) {
+      setLiveLocation({ lat: journey.current_latitude, lon: journey.current_longitude });
+    }
+  }, [journey?.current_latitude, journey?.current_longitude]);
+
+  useEffect(() => {
+    if (!journeyId && !journey?.id) return;
+    const jId = journeyId || journey?.id;
+    
+    const channel = supabase
+      .channel(`journey:${jId}`)
+      .on('broadcast', { event: 'location' }, (payload) => {
+        const { latitude, longitude, timestamp } = payload.payload;
+        if (latitude && longitude) {
+          setLiveLocation({ lat: latitude, lon: longitude });
+          setFreshness(0); // instant
+        }
+      })
+      .on('broadcast', { event: 'journey:completed' }, () => {
+         Alert.alert("Journey Completed", "The ward has ended their journey safely.");
+         navigation.goBack();
+      })
+      .subscribe();
+      
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [journeyId, journey?.id]);
 
   useEffect(() => {
     const targetDate = journey?.last_location_at || alert?.created_at;
@@ -248,7 +296,17 @@ export const GuardianAlertDetailsScreen: React.FC = () => {
 
         {journey && (
           <>
-            <SectionHeader title="Current Journey" />
+            <SectionHeader title="Live Tracking" />
+            
+            <View style={styles.mapContainer}>
+              <MapRouteLayer 
+                routePoints={routePoints}
+                currentLocation={liveLocation}
+                startLocation={journey.start_latitude && journey.start_longitude ? { lat: journey.start_latitude, lon: journey.start_longitude } : null}
+                destinationLocation={journey.destination_latitude && journey.destination_longitude ? { lat: journey.destination_latitude, lon: journey.destination_longitude } : null}
+              />
+            </View>
+            
             <View style={styles.card}>
               {(journey.start_address || journey.start_latitude) && (
                  <>
@@ -416,4 +474,13 @@ const styles = StyleSheet.create({
   statusFailed: { color: '#EF4444' },
   statusNeutral: { color: '#F59E0B' },
   eventDivider: { height: 1, backgroundColor: '#F1F5F9', marginVertical: 12 },
+  mapContainer: {
+    height: 300,
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    shadowColor: '#1E293B', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 12, elevation: 3
+  },
 });

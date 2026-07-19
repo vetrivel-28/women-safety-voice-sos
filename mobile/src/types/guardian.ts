@@ -39,6 +39,7 @@ export interface GuardianJourney {
   estimated_duration_minutes?: number;
   estimated_arrival_at?: string;
   route_status?: string;
+  route_polyline?: string;
   profiles?: {
     full_name: string;
     phone: string;
