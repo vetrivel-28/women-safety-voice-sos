@@ -48,17 +48,6 @@ def _notify_safety_recipients(service_client, ward_id: str, ward_name: str,
     except Exception as e:
         logger.warning(f"_notify_safety_recipients: guardian fetch failed: {e}")
 
-    try:
-        mem = service_client.table("family_members").select("family_id") \
-            .eq("user_id", ward_id).eq("status", "active").execute()
-        if mem.data:
-            fid = mem.data[0]["family_id"]
-            others = service_client.table("family_members").select("user_id") \
-                .eq("family_id", fid).eq("status", "active").neq("user_id", ward_id).execute()
-            recipient_ids += [r["user_id"] for r in (others.data or [])]
-    except Exception as e:
-        logger.warning(f"_notify_safety_recipients: family fetch failed: {e}")
-
     seen: set[str] = set()
     for rid in recipient_ids:
         if not rid or rid in seen:
@@ -515,31 +504,33 @@ def complete_journey(journey_id: str, auth_data: dict = Depends(get_current_user
         except Exception as notif_err:
             logger.warning(f"[TRUSTED PLACE NOTIFICATION] guardian notification failed: {notif_err}")
 
-        # Ward notification when trusted place reached
-        if completed_reason == "REACHED_TRUSTED_PLACE":
-            try:
-                dest_label = (
-                    completed_journey.get("destination_name")
-                    or completed_journey.get("destination_address")
-                    or "destination"
-                )
-                logger.info(f"[TRUSTED PLACE NOTIFICATION] ward = {user.id}, destination = {dest_label}")
-                supabase.table("in_app_notifications").insert({
-                    "user_id": user.id,
-                    "actor_user_id": user.id,
-                    "type": "safe_window_completed",
-                    "title": "Safe Window completed",
-                    "message": f"You reached {dest_label} safely.",
-                    "metadata": {
-                        "journey_id": journey_id,
-                        "trusted_place_id": completed_journey.get("trusted_place_id"),
-                        "destination_name": dest_label,
-                        "completed_reason": completed_reason,
-                    },
-                }).execute()
-                logger.info(f"[TRUSTED PLACE NOTIFICATION] ward notification created successfully")
-            except Exception as ward_notif_err:
-                logger.warning(f"[TRUSTED PLACE NOTIFICATION] ward notification failed: {ward_notif_err}")
+        # Ward notification (always emit so client can clear notifications)
+        try:
+            dest_label = (
+                completed_journey.get("destination_name")
+                or completed_journey.get("destination_address")
+                or "destination"
+            )
+            title = "Safe Window completed" if completed_reason == "REACHED_TRUSTED_PLACE" else "Safe Window ended"
+            msg = f"You reached {dest_label} safely." if completed_reason == "REACHED_TRUSTED_PLACE" else "Your Safe Window has ended."
+            
+            supabase.table("in_app_notifications").insert({
+                "user_id": user.id,
+                "actor_user_id": user.id,
+                "type": "safe_window_completed" if completed_reason == "REACHED_TRUSTED_PLACE" else "safe_window_ended",
+                "title": title,
+                "message": msg,
+                "metadata": {
+                    "journey_id": journey_id,
+                    "trusted_place_id": completed_journey.get("trusted_place_id"),
+                    "destination_name": dest_label,
+                    "completed_reason": completed_reason,
+                    "action": "clear_journey_notifications",
+                },
+            }).execute()
+            logger.info(f"[TRUSTED PLACE NOTIFICATION] ward notification (clear_journey_notifications) created successfully")
+        except Exception as ward_notif_err:
+            logger.warning(f"[TRUSTED PLACE NOTIFICATION] ward notification failed: {ward_notif_err}")
 
         return completed_journey
     except HTTPException:

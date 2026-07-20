@@ -22,11 +22,8 @@ export const SettingsScreen: React.FC = () => {
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
-  const addLog = (msg: string) => {
-    const time = new Date().toLocaleTimeString();
-    setDebugLogs(prev => [...prev, `[${time}] ${msg}`]);
-  };
+
+
 
   const { contacts, getPrimaryContact } = useContacts();
   const [devMode, setDevMode] = useState(false);
@@ -49,11 +46,9 @@ export const SettingsScreen: React.FC = () => {
 
   const fetchProfile = async () => {
     setIsLoadingProfile(true);
-    addLog('--- FETCH PROFILE START ---');
 
     try {
       const response = await apiClient.get('/api/profile');
-      addLog(`-> GET STATUS: ${response.status}`);
 
       const parsed = response.data;
       if (parsed) {
@@ -64,7 +59,7 @@ export const SettingsScreen: React.FC = () => {
         setMedicalNotes(parsed.medical_notes || '');
       }
     } catch (e: any) {
-      addLog(`-> GET FAILED: ${e.message}`);
+      console.warn('[Settings] fetchProfile failed:', e.message);
       // Do not clear the existing profile state on failure
       Alert.alert("Notice", "Could not load profile. Showing last known data.");
     } finally {
@@ -74,14 +69,12 @@ export const SettingsScreen: React.FC = () => {
 
   const saveProfile = async () => {
     setIsSavingProfile(true);
-    addLog('--- SAVE PROFILE START ---');
 
     try {
       // 1. Health check first
       try {
         await apiClient.get('/health');
       } catch (healthError: any) {
-        addLog(`-> HEALTH CHECK FAILED: ${healthError.message}`);
         Alert.alert(
           'Cannot reach backend.',
           healthError.customMessage || `Backend URL: ${API_BASE_URL}\n\nPossible causes:\n• backend not running\n• phone not on same Wi-Fi\n• firewall\n• invalid backend URL`
@@ -105,8 +98,6 @@ export const SettingsScreen: React.FC = () => {
 
       // 2. Perform Save
       const response = await apiClient.patch('/api/profile', changed);
-      
-      addLog(`-> POST STATUS: ${response.status}`);
       Alert.alert('Success', 'Profile updated successfully.');
       
       // Trust the server response for the new state
@@ -120,7 +111,7 @@ export const SettingsScreen: React.FC = () => {
       setIsEditingProfile(false);
 
     } catch (e: any) {
-      addLog(`-> POST FAILED: ${e.message}`);
+      console.warn('[Settings] saveProfile failed:', e.message);
       Alert.alert('Save Failed', e.customMessage || e.message || 'Network error');
     } finally {
       setIsSavingProfile(false);
@@ -153,15 +144,6 @@ export const SettingsScreen: React.FC = () => {
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
 
-        <View style={styles.card}>
-          <Text style={{ fontWeight: 'bold', marginBottom: 8 }}>Diagnostic Logs:</Text>
-          {debugLogs.map((log, i) => (
-            <Text key={i} style={{ fontSize: 10, fontFamily: 'monospace', color: '#333' }}>{log}</Text>
-          ))}
-          <TouchableOpacity onPress={() => setDebugLogs([])}>
-            <Text style={{ color: 'blue', marginTop: 10 }}>Clear Logs</Text>
-          </TouchableOpacity>
-        </View>
 
         <View style={styles.header}>
           <Text style={styles.title}>Settings</Text>

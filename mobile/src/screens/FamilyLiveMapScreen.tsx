@@ -81,6 +81,8 @@ export default function FamilyLiveMapScreen() {
   const mapRef = useRef<any>(null);
   const toggleTimestampRef = useRef<number>(0);
   const cameraPositionRef = useRef<{ center: [number, number]; zoom: number } | null>(null);
+  // Track whether sharing was restored from AsyncStorage on mount (not toggled by user)
+  const sharingRestoredOnMount = useRef(false);
 
   const snapPoints = useMemo(() => ['15%', '60%'], []);
 
@@ -88,7 +90,12 @@ export default function FamilyLiveMapScreen() {
     const initLocation = async () => {
       try {
         const stored = await AsyncStorage.getItem(SHARING_PREF_KEY);
-        if (stored === 'true') setSharingEnabled(true);
+        if (stored === 'true') {
+          setSharingEnabled(true);
+          // Mark that sharing was restored from storage so we can auto-start it
+          // once myUserId and family refs are populated (see useEffect below).
+          sharingRestoredOnMount.current = true;
+        }
 
         const lastLoc = await getLastKnownLocation();
         if (lastLoc && !lastLoc.permissionDenied && lastLoc.latitude && lastLoc.longitude) {
@@ -180,6 +187,27 @@ export default function FamilyLiveMapScreen() {
       fetchNearbyResponders();
     }
   }, [family?.id]);
+
+  // Immediately sync location sharing when restored from AsyncStorage.
+  // initLocation() runs before auth session resolves, so myUserId / family.id
+  // are not yet set at that point. This effect fires once all three are ready.
+  useEffect(() => {
+    if (!sharingRestoredOnMount.current) return;
+    if (!myUserId || !family) return;
+    // Only fire once — clear the flag after first trigger
+    sharingRestoredOnMount.current = false;
+    const syncRestoredSharing = async () => {
+      try {
+        await familyLocationsApi.toggleSharing(true);
+        await updateMyLocation();
+        await fetchLocations(myUserId);
+      } catch (e) {
+        console.warn('[FamilyMap] Failed to sync restored sharing state', e);
+      }
+    };
+    syncRestoredSharing();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myUserId, family?.id]);
 
   const fetchSafetySummary = async () => {
     if (!family) return;

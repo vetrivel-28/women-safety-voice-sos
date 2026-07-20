@@ -1,8 +1,9 @@
 import React, { useMemo, useEffect, useState, useRef } from 'react';
-import { StyleSheet, View, Text } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useMapProvider } from '../../context/MapContext';
 import { getMapStyleUrl } from '../../config/MapConfig';
+import { useMapCamera } from '../../hooks/useMapCamera';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
@@ -25,6 +26,7 @@ interface MapRouteLayerProps {
 
 export default function MapRouteLayer({ routePoints, currentLocation, startLocation, destinationLocation }: MapRouteLayerProps) {
   const { mapStyleId } = useMapProvider();
+  const { cameraRef, setCenter, fitBounds, isUserInteraction, onRegionDidChange, resumeAutoTracking, DEFAULT_MAP_CENTER } = useMapCamera();
 
   // ── Smooth marker animation ───────────────────────────────────────────────
   const [animatedLoc, setAnimatedLoc] = useState<{lat: number, lon: number} | null>(null);
@@ -147,52 +149,45 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
   const MapLayer = MapLibreGL.Layer;
   const MarkerComp = MapLibreGL.Marker;
 
-  // Camera: follow user once a GPS fix is received; otherwise fit initial bounds
-  const renderCamera = () => {
-    if (animatedLoc) {
-      // Follow mode: keep user centered at street zoom level
-      return (
-        <CameraComponent
-          center={[animatedLoc.lon, animatedLoc.lat] as [number, number]}
-          zoom={16}
-          duration={800}
-          easing="fly"
-        />
-      );
+  // Imperatively move camera, skipping if user is panning
+  useEffect(() => {
+    try {
+      console.log(`[MapRouteLayer] Effect evaluating camera move. isUserInteraction=${isUserInteraction}`);
+      if (isUserInteraction) return; // Wait for user to tap recenter
+      
+      if (animatedLoc) {
+        if (!Number.isFinite(animatedLoc.lon) || !Number.isFinite(animatedLoc.lat)) {
+           console.error('[MapRouteLayer] Invalid animatedLoc coordinates:', animatedLoc);
+           return;
+        }
+        console.log(`[MapRouteLayer] Centering on animatedLoc: ${animatedLoc.lon}, ${animatedLoc.lat}`);
+        setCenter(animatedLoc.lon, animatedLoc.lat, 16, 800);
+      } else if (initialBounds) {
+        if (!initialBounds.sw || !initialBounds.ne || !Number.isFinite(initialBounds.sw[0]) || !Number.isFinite(initialBounds.ne[0])) {
+           console.error('[MapRouteLayer] Invalid initialBounds:', initialBounds);
+           return;
+        }
+        console.log(`[MapRouteLayer] Fitting bounds:`, initialBounds);
+        fitBounds(initialBounds.sw as [number, number], initialBounds.ne as [number, number], 60, 800);
+      } else {
+        console.log(`[MapRouteLayer] Centering on DEFAULT_MAP_CENTER:`, DEFAULT_MAP_CENTER);
+        setCenter(DEFAULT_MAP_CENTER[0], DEFAULT_MAP_CENTER[1], 13, 0);
+      }
+    } catch (e: any) {
+      console.error('[MapRouteLayer] Camera effect crashed:', e, e?.stack);
     }
-    if (initialBounds) {
-      return (
-        <CameraComponent
-          bounds={[
-            initialBounds.sw[0], // west
-            initialBounds.sw[1], // south
-            initialBounds.ne[0], // east
-            initialBounds.ne[1], // north
-          ] as [number, number, number, number]}
-          padding={{ left: 40, right: 40, top: 100, bottom: 280 }}
-          duration={800}
-          easing="fly"
-        />
-      );
-    }
-    // Fallback: default center
-    return (
-      <CameraComponent
-        center={[77.0272806, 11.0283256] as [number, number]}
-        zoom={6}
-        duration={0}
-      />
-    );
-  };
+  }, [animatedLoc, initialBounds, isUserInteraction, setCenter, fitBounds, DEFAULT_MAP_CENTER]);
 
   return (
-    <MapComponent
-      style={StyleSheet.absoluteFillObject}
-      mapStyle={getMapStyleUrl(mapStyleId)}
-      logoEnabled={false}
-      attributionEnabled={false}
-    >
-      {renderCamera()}
+    <>
+      <MapComponent
+        style={StyleSheet.absoluteFillObject}
+        mapStyle={getMapStyleUrl(mapStyleId)}
+        logoEnabled={false}
+        attributionEnabled={false}
+        onRegionDidChange={onRegionDidChange}
+      >
+        <CameraComponent ref={cameraRef} />
 
       {/* Travelled segment: grey */}
       {travelledRoute && (
@@ -242,6 +237,13 @@ export default function MapRouteLayer({ routePoints, currentLocation, startLocat
         </MarkerComp>
       )}
     </MapComponent>
+
+    {isUserInteraction && (
+      <TouchableOpacity style={styles.recenterBtn} onPress={resumeAutoTracking}>
+        <Text style={styles.recenterText}>◎ Recenter</Text>
+      </TouchableOpacity>
+    )}
+    </>
   );
 }
 
@@ -269,4 +271,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#4F46E5',
     borderWidth: 3, borderColor: '#FFFFFF',
   },
+  recenterBtn: {
+    position: 'absolute',
+    bottom: 40,
+    right: 16,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  recenterText: {
+    color: '#4F46E5',
+    fontWeight: '700',
+  }
 });

@@ -27,7 +27,18 @@ export const GuardianAlertDetailsScreen: React.FC = () => {
   const route = useRoute<any>();
   const navigation = useNavigation<AlertDetailsNavigationProp>();
   const insets = useSafeAreaInsets();
-  const { alertId, journeyId } = route.params;
+  let alertId: string | undefined;
+  let journeyId: string | undefined;
+
+  try {
+    const params = (route.params as any) ?? {};
+    alertId = params.alertId;
+    journeyId = params.journeyId;
+    console.log(`[GuardianAlertDetails] Mounted with params: alertId=${alertId}, journeyId=${journeyId}`);
+  } catch (e: any) {
+    console.error('[GuardianAlertDetails] Failed to parse route params:', e, e?.stack);
+  }
+
   const { model, dismissAlert } = useGuardianDashboard();
 
   const alert = useMemo(() => model.activeAlerts.find(a => a.id === alertId), [model.activeAlerts, alertId]);
@@ -74,22 +85,26 @@ export const GuardianAlertDetailsScreen: React.FC = () => {
   };
 
   const handleNavigate = () => {
-    let url = '';
-    const destLat = alert?.location_lat || journey?.destination_latitude || journey?.current_latitude;
-    const destLng = alert?.location_long || journey?.destination_longitude || journey?.current_longitude;
-    const startLat = journey?.start_latitude;
-    const startLng = journey?.start_longitude;
+    try {
+      let url = '';
+      const destLat = alert?.location_lat || journey?.destination_latitude || journey?.current_latitude;
+      const destLng = alert?.location_long || journey?.destination_longitude || journey?.current_longitude;
+      const startLat = journey?.start_latitude;
+      const startLng = journey?.start_longitude;
 
-    if (startLat && startLng && destLat && destLng) {
-      url = `https://www.google.com/maps/dir/?api=1&origin=${startLat},${startLng}&destination=${destLat},${destLng}`;
-    } else if (destLat && destLng) {
-      url = `https://www.google.com/maps/search/?api=1&query=${destLat},${destLng}`;
-    } else {
-      Alert.alert('Location unavailable');
-      return;
+      if (startLat && startLng && destLat && destLng) {
+        url = `https://www.google.com/maps/dir/?api=1&origin=${startLat},${startLng}&destination=${destLat},${destLng}`;
+      } else if (destLat && destLng) {
+        url = `https://www.google.com/maps/search/?api=1&query=${destLat},${destLng}`;
+      } else {
+        Alert.alert('Location unavailable');
+        return;
+      }
+      
+      Linking.openURL(url).catch(() => Alert.alert('Could not open maps'));
+    } catch (e: any) {
+      console.error('[GuardianAlertDetails] handleNavigate crashed:', e, e?.stack);
     }
-    
-    Linking.openURL(url).catch(() => Alert.alert('Could not open maps'));
   };
 
   const [freshness, setFreshness] = useState<number | null>(null);

@@ -112,12 +112,6 @@ export default function HomeScreen() {
         />
 
         <QuickActionCard
-          title="Check-In Timer"
-          subtitle="Set a timer during travel"
-          icon="⏳"
-          onPress={() => navigation.navigate('DeadManCheckIn')}
-        />
-        <QuickActionCard
           title="Trusted Guardians"
           subtitle={`${contacts.length} guardians active`}
           icon="🛡️"
@@ -128,12 +122,6 @@ export default function HomeScreen() {
           subtitle="Review past events"
           icon="📋"
           onPress={() => navigation.navigate('AlertHistory')}
-        />
-        <QuickActionCard
-          title="Privacy & Safety"
-          subtitle="PINs, account, and preferences"
-          icon="⚙️"
-          onPress={() => navigation.navigate('Settings')}
         />
         
       </ScrollView>

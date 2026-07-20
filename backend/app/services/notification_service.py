@@ -80,6 +80,27 @@ class NotificationService:
             
     def _send_sms(self, phone: str, message: str) -> Any:
         try:
+            if self.sms_provider == "twilio":
+                sid = os.getenv("TWILIO_ACCOUNT_SID")
+                token = os.getenv("TWILIO_AUTH_TOKEN")
+                from_num = os.getenv("TWILIO_FROM_NUMBER")
+                
+                if not sid or not token or not from_num:
+                    logger.error("Missing Twilio credentials in env (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER)")
+                    return {"sms_sent": False, "reason": "MISSING_CREDENTIALS"}
+                    
+                import requests
+                url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+                auth = (sid, token)
+                data = {"To": phone, "From": from_num, "Body": message}
+                response = requests.post(url, auth=auth, data=data, timeout=10)
+                if response.status_code in (200, 201):
+                    logger.info(f"[TWILIO SMS] Sent to {phone}")
+                    return {"sms_sent": True, "reason": "SENT_VIA_TWILIO"}
+                else:
+                    logger.error(f"Twilio API Error: {response.text}")
+                    return {"sms_sent": False, "reason": "TWILIO_API_ERROR"}
+                    
             if self.sms_provider == "mock" or self.sms_provider == "none" or not self.sms_provider:
                 logger.info(f"[MOCK SMS] To: {phone} | Body: {message}")
                 return {"sms_sent": False, "reason": "SMS_PROVIDER_NOT_CONFIGURED"}
@@ -89,6 +110,45 @@ class NotificationService:
         except Exception as e:
             logger.error(f"SMS Provider Crash Prevented: {e}")
             return {"sms_sent": False, "reason": "PROVIDER_CRASH_PREVENTED"}
+            
+    def _send_email(self, email: str, subject: str, message: str) -> Any:
+        try:
+            api_key = os.getenv("SENDGRID_API_KEY")
+            from_email = os.getenv("SENDGRID_FROM_EMAIL")
+            
+            if not api_key or not from_email:
+                logger.error("Missing SendGrid credentials in env (SENDGRID_API_KEY, SENDGRID_FROM_EMAIL)")
+                return {"email_sent": False, "reason": "MISSING_CREDENTIALS"}
+                
+            import requests
+            url = "https://api.sendgrid.com/v3/mail/send"
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            data = {
+                "personalizations": [{"to": [{"email": email}]}],
+                "from": {"email": from_email},
+                "subject": subject,
+                "content": [{"type": "text/plain", "value": message}]
+            }
+            response = requests.post(url, headers=headers, json=data, timeout=10)
+            if response.status_code in (200, 201, 202):
+                logger.info(f"[SENDGRID EMAIL] Sent to {email}")
+                return {"email_sent": True, "reason": "SENT_VIA_SENDGRID"}
+            else:
+                logger.error(f"SendGrid API Error: {response.text}")
+                return {"email_sent": False, "reason": "SENDGRID_API_ERROR"}
+        except Exception as e:
+            logger.error(f"SendGrid Email Crash Prevented: {e}")
+            return {"email_sent": False, "reason": "PROVIDER_CRASH_PREVENTED"}
+            
+    def _send_whatsapp(self, phone: str, message: str) -> Any:
+        logger.info(f"[MOCK WHATSAPP] To: {phone} | Body: {message}")
+        logger.warning("WhatsApp is explicitly stubbed and not implemented for this release.")
+        return {"whatsapp_sent": False, "reason": "NOT_IMPLEMENTED_THIS_RELEASE"}
+
+    def _send_voice(self, phone: str, message: str) -> Any:
+        logger.info(f"[MOCK VOICE] To: {phone} | Body: {message}")
+        logger.warning("Voice calling is explicitly stubbed and not implemented for this release.")
+        return {"voice_sent": False, "reason": "NOT_IMPLEMENTED_THIS_RELEASE"}
         
     def _send_push(self, token: str, message: str) -> str:
         if not token:

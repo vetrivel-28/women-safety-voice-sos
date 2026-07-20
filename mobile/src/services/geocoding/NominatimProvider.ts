@@ -3,12 +3,11 @@ import { GeocodingProvider, PlaceResult } from './GeocodingProvider';
 export class NominatimProvider implements GeocodingProvider {
   async searchPlaces(query: string, currentLoc?: {latitude: number, longitude: number}): Promise<PlaceResult[]> {
     try {
-      // Note: Public Nominatim API is for demo/testing and has usage limits, not for production SLA
-      // Bias search to Tamil Nadu
-      const searchBox = `76.0,13.6,80.4,8.0`; // left,top,right,bottom (lon, lat)
-      const searchQuery = query.toLowerCase().includes('tamil nadu') ? query : `${query}, Tamil Nadu`;
-      
-      let url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery)}&format=json&limit=5&addressdetails=1&viewbox=${searchBox}&bounded=1&countrycodes=in`;
+      // Search all of India with optional proximity bias
+      const biasParam = currentLoc
+        ? `&lat=${currentLoc.latitude}&lon=${currentLoc.longitude}`
+        : '';
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=7&addressdetails=1&countrycodes=in${biasParam}`;
       const response = await fetch(url, {
         headers: {
           'Accept': 'application/json',

@@ -130,34 +130,124 @@ export const AppNavigator = () => {
 
     const handleDeepLink = async ({ url }: { url: string }) => {
       if (!url) return;
-      
-      // Handle Auth
+
+      // Handle Supabase auth callback (magic link / OAuth)
       const match = url.match(/#access_token=([^&]+)/);
       const refreshTokenMatch = url.match(/&refresh_token=([^&]+)/);
-      
+
       if (match && refreshTokenMatch) {
         const access_token = match[1];
         const refresh_token = refreshTokenMatch[1];
-        await supabase.auth.setSession({
-          access_token,
-          refresh_token,
-        });
+        await supabase.auth.setSession({ access_token, refresh_token });
         return;
       }
-      
-      // Handle custom scheme deep links (e.g., safeher://sos?family_id=123)
+
+      // Handle custom scheme deep links: safeher://<path>?<params>
       try {
         const parsedUrl = Linking.parse(url);
-        if (parsedUrl.path === 'sos' || parsedUrl.queryParams?.type === 'sos') {
-           // Deep link directly to family dashboard
-           if (navigationRef.current) {
-             navigationRef.current.navigate('FamilyDashboard');
-           }
+        const path = parsedUrl.path ?? '';
+        const params = parsedUrl.queryParams ?? {};
+
+        const navigate = (screen: string, screenParams?: object) => {
+          if (navigationRef.current) {
+            // @ts-ignore — dynamic navigation
+            navigationRef.current.navigate(screen, screenParams);
+          }
+        };
+
+        // safeher://guardian or safeher://guardian?alertId=xxx&journeyId=yyy
+        if (path === 'guardian' || params.screen === 'guardian') {
+          if (params.alertId || params.journeyId) {
+            navigate('GuardianAlertDetails', {
+              alertId: params.alertId as string | undefined,
+              journeyId: params.journeyId as string | undefined,
+            });
+          } else {
+            navigate('GuardianDashboard');
+          }
+          return;
+        }
+
+        // safeher://family or safeher://family?familyId=xxx
+        if (path === 'family' || params.screen === 'family') {
+          navigate('FamilyLiveMap', {
+            familyId: params.familyId as string | undefined,
+          });
+          return;
+        }
+
+        // safeher://alert?alertId=xxx
+        if (path === 'alert' || params.alertId) {
+          navigate('GuardianAlertDetails', {
+            alertId: params.alertId as string | undefined,
+          });
+          return;
+        }
+
+        // safeher://sos (legacy)
+        if (path === 'sos' || params.type === 'sos') {
+          navigate('GuardianDashboard');
+          return;
         }
       } catch (e) {
-        console.warn('Failed to parse deep link', e);
+        console.warn('[DeepLink] Failed to parse deep link', e);
       }
     };
+
+    // Handle notification taps (expo-notifications)
+    let notifSub: any = null;
+    try {
+      const Notifications = require('expo-notifications');
+      notifSub = Notifications.addNotificationResponseReceivedListener(
+        (response: any) => {
+          const data = response?.notification?.request?.content?.data ?? {};
+          const notifType: string = data.type ?? data.screen ?? '';
+
+          const navigate = (screen: string, params?: object) => {
+            if (navigationRef.current) {
+              // @ts-ignore
+              navigationRef.current.navigate(screen, params);
+            }
+          };
+
+          if (
+            notifType === 'guardian' ||
+            notifType === 'journey_started' ||
+            notifType === 'journey_check_in' ||
+            notifType === 'ward_alert' ||
+            notifType === 'sos' ||
+            notifType === 'safe_window'
+          ) {
+            if (data.alertId || data.alert_id || data.journeyId || data.journey_id) {
+              navigate('GuardianAlertDetails', {
+                alertId: data.alertId ?? data.alert_id,
+                journeyId: data.journeyId ?? data.journey_id,
+              });
+            } else {
+              navigate('GuardianDashboard');
+            }
+            return;
+          }
+
+          if (notifType === 'family' || notifType === 'family_location') {
+            navigate('FamilyLiveMap', {
+              familyId: data.familyId ?? data.family_id,
+            });
+            return;
+          }
+
+          if (notifType === 'alert' || notifType === 'alert_details') {
+            navigate('GuardianAlertDetails', {
+              alertId: data.alertId ?? data.alert_id,
+            });
+            return;
+          }
+        },
+      );
+    } catch (e) {
+      // expo-notifications may not be available in all environments
+      console.log('[Notifications] Response listener skipped:', e);
+    }
 
     const urlSubscription = Linking.addEventListener('url', handleDeepLink);
     
@@ -169,6 +259,7 @@ export const AppNavigator = () => {
       active = false;
       subscription.unsubscribe();
       urlSubscription.remove();
+      if (notifSub?.remove) notifSub.remove();
     };
   }, []);
 
